@@ -41,7 +41,7 @@ class DUTTarget:
 class DiveFuzzConfig:
     gen_only: bool
     threads: int
-    eliminate_error: bool
+    dive_enable: bool
     mode: str
     seeds_output: str
     

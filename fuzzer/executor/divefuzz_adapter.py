@@ -53,7 +53,7 @@ def setup_divefuzz(seed_config: GeneratedSeedConfig, global_logger):
     divefuzz_config = DiveFuzzArgConfig(
         mutation=seed_config.divefuzz.mode == "mutate",
         generate=seed_config.divefuzz.mode == "generate",
-        eliminate_enable=seed_config.divefuzz.eliminate_error,
+        eliminate_enable=seed_config.divefuzz.dive_enable,
         cva6=seed_config.divefuzz.is_cva6,
         rv32=seed_config.divefuzz.is_rv32,
         instr_number=seed_config.divefuzz.ins_num,
@@ -76,7 +76,7 @@ def run_divefuzz(seed_config: GeneratedSeedConfig, seed_config_logger) -> list:
         generate_instructions_parallel(
             instr_number=seed_config.divefuzz.ins_num,
             seed_times=seed_config.divefuzz.seeds_num,
-            eliminate_enable=seed_config.divefuzz.eliminate_error,
+            eliminate_enable=seed_config.divefuzz.dive_enable,
             is_cva6=seed_config.divefuzz.is_cva6,
             is_rv32=seed_config.divefuzz.is_rv32,
             max_workers=seed_config.divefuzz.threads,
@@ -90,7 +90,7 @@ def run_divefuzz(seed_config: GeneratedSeedConfig, seed_config_logger) -> list:
             max_workers=seed_config.divefuzz.threads,
             enable_ext=seed_config.divefuzz.enable_extension,
             exclude_extensions=seed_config.divefuzz.exclude_extension,
-            eliminate_enable=seed_config.divefuzz.eliminate_error,
+            eliminate_enable=seed_config.divefuzz.dive_enable,
             arch=_divefuzz_config.arch if _divefuzz_config else None
         )
     else:

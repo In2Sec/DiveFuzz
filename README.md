@@ -119,7 +119,7 @@ seeds:
     # parallelism
     threads: 128
     # Whether to enable error elimination
-    eliminate_error: true
+    dive_enable: true
     # Generate or mutate
     mode: generate
     # Path to store seeds after generation/mutation
