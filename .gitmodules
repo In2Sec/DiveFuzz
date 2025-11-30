@@ -1,0 +1,19 @@
+[submodule "dut/XiangShan"]
+	path = dut/XiangShan
+	url = https://github.com/youzi27/XiangShan.git
+[submodule "dut/NutShell"]
+	path = dut/NutShell
+	url = https://github.com/youzi27/NutShell.git
+	branch = dev-difftest
+[submodule "dut/rocket-chip"]
+	path = dut/rocket-chip
+	url = https://github.com/youzi27/rocket-chip.git
+	branch = dev-difftest
+[submodule "ref/riscv-isa-sim-adapter"]
+	path = ref/riscv-isa-sim-adapter
+	url = https://github.com/youzi27/riscv-isa-sim-adapter.git
+	branch = spike-adapter
+[submodule "ref/riscv-isa-sim"]
+	path = ref/riscv-isa-sim
+	url = https://github.com/youzi27/riscv-isa-sim-adapter.git
+	branch = master
