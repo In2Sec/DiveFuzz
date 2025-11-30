@@ -1,4 +1,4 @@
-# Device under test target config
+# Desgin under test target config
 dut_target:
 # The name of the DUT target
 - name: "XiangShan KMH DiveFuzz Inst 100"
