@@ -1,6 +1,6 @@
 # DiveFuzz
 
-DiveFuzz is a diversified instruction generation approach designed specifically for RISC-V CPUs. Its core idea is to drive testing through dynamically diversified instruction write-back values, enabling effective exploration of CPU states. More details can be found in the [paper](https://dl.acm.org/doi/10.1145/3719027.3765167). In addition, the project is under active development, with new extensions and features continuously being integrated.
+DiveFuzz is a diversified instruction generation approach designed specifically for RISC-V CPUs. Its core idea is to drive testing through dynamically diversified instruction write-back values, enabling effective exploration of CPU states. More details can be found in the [paper](https://dl.acm.org/doi/10.1145/3719027.3765167). In addition, the project is under active development and will continue to incorporate new extensions and features beyond those described in the paper.
 
 
 ## Get Start
