@@ -1,0 +1,49 @@
+dut_target:
+- name: "XiangShan KMH DiveFuzz Inst 1000"
+  threads: 8
+  version: commit:718a93f
+  diff_ref: NEMU
+  emu_path: /path/XiangShan
+  cmd: ./build/emu -i $1  --diff /path/XiangShan/ready-to-run/riscv64-spike-so
+
+
+
+
+seeds:
+- name: divefuzz_ins_100
+  input: divefuzz
+  divefuzz:
+    # Only generate seeds, do not deliver to DUT
+    gen_only: True
+    # parallelism
+    threads: 128
+    # Whether to enable diversification
+    dive_enable: False
+    # Generate or mutate
+    mode: generate
+    # Path to store seeds after generation/mutation
+    seeds_output: /path/out_seeds
+
+    # The following features are only effective when the mode is set to generate
+    # Number of seeds to generate
+    seeds_num: 100
+    # Number of instructions for each seed
+    ins_num: 100
+    # Special instruction generation for cva6
+    is_cva6: false
+    # Special instruction generation for rv32
+    is_rv32: false
+
+    # # The following features are only effective when the mode is set to mutate
+    # # In mutation mode, the path to the initial corpus
+    # mutate_input: /nfs/home/yangyanqi/xs-env-gzh/python/v-fu/new/seeds_output_inst_1000
+    # # Enable instruction expansion mutation
+    # enable_extension: true
+    # # Excluded instruction extensions
+    # exclude_extension: ['zicsr']
+
+# 
+# - name: seed_dir
+#   input: dir
+#   suffix: elf
+#   path: /path/to/dir
