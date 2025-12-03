@@ -11,8 +11,8 @@ dut_target:
   # The path of the DUT
   emu_path: /path/many_version/718a93f/XiangShan
   # Tell DiveFuzz how to run the DUT
-  # notice: $1 is the input file
-  cmd: ./build/emu -i $1  --diff /path/dut_fuzz/dut_instance/xs-env/XiangShan/ready-to-run/riscv64-spike-so
+  # notice: $1 is the input file; you can change any dut 
+  cmd: ./build/emu -i $1  --diff /path/DiveFuzz/dut/XiangShan/ready-to-run/riscv64-spike-so
 
 seeds:
 - name: divefuzz_ins_10
@@ -24,7 +24,7 @@ seeds:
     # parallelism
     threads: 4
     # Whether to enable diversification
-    dive_enable: true
+    dive_enable: false
     # Generate or mutate
     mode: generate
     # Path to store seeds after generation/mutation
