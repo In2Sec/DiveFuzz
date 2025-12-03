@@ -19,20 +19,17 @@ from enum import Enum, auto
 class TemplateType(Enum):
     """Enumeration of supported template types."""
     # XiangShan templates
-    # This mode supports the M, S, V, and U privilege levels.
-    DEFAULT_MODE = auto()   # xiangshan/
-    # XIANGSHAN_S_MODE = auto()   # xiangshan
+    XIANGSHAN = 'xiangshan'   # xiangshan - M/S/VS/U... mode 
+
 
     # NutShell templates
-    # NUTSHELL_M_MODE = auto()    # nutshell
+    NUTSHELL = 'nutshell'     # nutshell - Machine mode with mtvec handler
 
     # TestXS templates
-    # TESTXS_S_MODE = auto()      # testxs/s_mode.S - Supervisor mode (same as xiangshan)
-    # TESTXS_U_MODE = auto()      # testxs/u_mode.S - User mode with complex page tables
+    ROCKET = 'rocket'         
 
+    # TESTXS_U_MODE = 'testxs_u_mode'         # testxs/u_mode.S - User mode with complex page tables
 
-# Default template type
-DEFAULT_TEMPLATE_TYPE = TemplateType.DEFAULT_MODE
 
 # ------------------------------------------------------------------------------
 # Hook Constants

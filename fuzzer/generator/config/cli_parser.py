@@ -15,6 +15,7 @@ import argparse
 import os
 from pathlib import Path
 from ..asm_template_manager.ext_list import allowed_ext
+from ..asm_template_manager.constants import TemplateType
 
 def create_parser():
     parser = argparse.ArgumentParser(
@@ -46,6 +47,11 @@ def create_parser():
     parser.add_argument('--allowed-ext-name', choices=allowed_ext.EXT_NAMES, default='general',
         help='Select the collection of allowed_ext.'
     )
+    parser.add_argument('--template-type', type=str,
+                        choices=[t.value for t in TemplateType],
+                        default='xiangshan',
+                        help='Template type for assembly generation'
+    )
 
     # -- workload configuration --
     parser.add_argument(
@@ -75,7 +81,7 @@ def create_parser():
     # -- path configuration --
     parser.add_argument(
         '--seed-dir', type=Path,
-        default=Path('out-seeds'),
+        default=Path('out-seeds-2025-test'),
         help='Directory to read .S seed files in variant mode'
     )
     parser.add_argument(
@@ -85,7 +91,7 @@ def create_parser():
     )
     parser.add_argument(
         '--out-dir', type=Path, 
-        default=Path('out-seeds'),
+        default=Path('out-seeds-2025-test'),
         help='Output seed file directory in generate mode (used in generate mode)'
     )
 

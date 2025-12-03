@@ -168,7 +168,7 @@ class LabelManager:
             int: Current distance.
         """
         if self.active_jump is None:
-            return 0
+            raise ValueError("No active jump sequence")
 
         return self.active_jump['current_distance']
 
@@ -180,7 +180,7 @@ class LabelManager:
             int: Target distance.
         """
         if self.active_jump is None:
-            return 0
+            raise ValueError("No active jump sequence")
 
         return self.active_jump['target_distance']
 
@@ -204,11 +204,11 @@ class LabelManager:
             str or None: 'forward', 'backward', 'indirect', or None.
         """
         if self.active_jump is None:
-            return None
+            raise ValueError("No active jump sequence")
 
         return self.active_jump['type']
 
-    def get_jump_instruction(self) -> Optional[str]:
+    def get_jump_instruction(self) -> str:
         """
         Get the jump instruction saved in the active jump sequence.
 
@@ -216,11 +216,11 @@ class LabelManager:
             str or None: The jump instruction string, or None if no jump is active.
         """
         if self.active_jump is None:
-            return None
+            raise ValueError("No active jump sequence")
 
-        return self.active_jump.get('instruction', None)
+        return self.active_jump['instruction']
 
-    def get_loop_counter_reg(self) -> Optional[str]:
+    def get_loop_counter_reg(self) -> str:
         """
         Get the loop counter register name for the active jump sequence.
 
@@ -229,6 +229,6 @@ class LabelManager:
                         or no loop counter is used.
         """
         if self.active_jump is None:
-            return None
+            raise ValueError("No active jump sequence")
 
-        return self.active_jump.get('loop_counter_reg', None)
+        return self.active_jump['loop_counter_reg']

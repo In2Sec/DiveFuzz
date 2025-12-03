@@ -18,11 +18,12 @@ from ...asm_template_manager.riscv_asm_syntex import ArchConfig
 
 def generate_instructions_parallel(instr_number: int,
                                    seed_times: int,
-                                   eliminate_enable: bool = True,
-                                   is_cva6: bool = False,
-                                   is_rv32: bool = False,
-                                   max_workers: int = 4,
-                                   arch: ArchConfig = None):
+                                   eliminate_enable: bool,
+                                   is_cva6: bool,
+                                   is_rv32: bool,
+                                   max_workers: int,
+                                   arch: ArchConfig,
+                                   template_type: str):
     """
     Generate random RISC-V instructions in parallel across multiple processes.
 
@@ -42,13 +43,15 @@ def generate_instructions_parallel(instr_number: int,
     resolve_duplicates_fail = 0
     timeout_count = 0
 
+    # The timeout period = the number of instructions * 0.8 seconds
     timeout_seconds = instr_number * 0.8
-
+    # Maximum retry count to prevent unlimited retries
     max_retries = 5
 
     print("---Start generate instrs---")
     print(f"# Timeout per seed: {timeout_seconds}s")
 
+    # The list of seed indexes to be generated
     pending_seeds = list(range(seed_times))
     completed_count = 0
     retry_round = 0
@@ -57,6 +60,7 @@ def generate_instructions_parallel(instr_number: int,
         while pending_seeds and retry_round < max_retries:
             if retry_round > 0:
                 print(f"# Retry round {retry_round}/{max_retries} for {len(pending_seeds)} timed out seeds")
+
 
             futures = {}
             for seed_idx in pending_seeds:
@@ -67,12 +71,15 @@ def generate_instructions_parallel(instr_number: int,
                     eliminate_enable,
                     is_cva6,
                     is_rv32,
-                    arch
+                    arch,
+                    template_type
                 )
                 futures[future] = seed_idx
 
+            # Clear the pending list and get ready to collect the failed tasks
             pending_seeds = []
 
+            # collect results
             for future in tqdm(as_completed(futures), total=len(futures),
                              desc="# Generating instructions"):
                 seed_idx = futures[future]

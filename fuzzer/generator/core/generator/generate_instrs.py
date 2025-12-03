@@ -37,10 +37,11 @@ from ...instr_generator.label_manager import LabelManager
 from ...config.config_manager import MAX_MUTATE_TIME
 def generate_instructions(instr_number: int,
                           seed_times: int,
-                          eliminate_enable: bool = True,
-                          is_cva6: bool = False,
-                          is_rv32: bool = False,
-                          arch: ArchConfig = None):
+                          eliminate_enable: bool,
+                          is_cva6: bool,
+                          is_rv32: bool,
+                          arch: ArchConfig,
+                          template_type: str):
     """
     Generate random RISC-V instructions for a single seed.
 
@@ -54,7 +55,7 @@ def generate_instructions(instr_number: int,
     """
     # Create fresh template instance for this seed with random type and values
     # This ensures each seed gets independent random content (CSR, register init, etc.)
-    template = create_template_instance(arch)
+    template = create_template_instance(arch, template_type)
 
     # Calculate the total of explicitly assigned probabilities
     total_specified_prob = sum(allowed_ext.special_probabilities.values())

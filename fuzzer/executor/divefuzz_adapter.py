@@ -60,17 +60,18 @@ def setup_divefuzz(seed_config: GeneratedSeedConfig, global_logger):
         seeds=seed_config.divefuzz.seeds_num,
         max_workers=seed_config.divefuzz.threads,
         seed_dir=Path(seed_config.divefuzz.seeds_output),
-        mutate_out=Path(
-            seed_config.divefuzz.mutate_input) if seed_config.divefuzz.mutate_input else None,
+        mutate_out=Path(seed_config.divefuzz.mutate_input) if seed_config.divefuzz.mutate_input else Path.cwd(),
         out_dir=Path(seed_config.divefuzz.seeds_output),
         enable_ext=seed_config.divefuzz.enable_extension,
         exclude_ext=seed_config.divefuzz.exclude_extension if seed_config.divefuzz.exclude_extension else [],
+        template_type=seed_config.divefuzz.template_type,
     )
     _divefuzz_config = setup_config(divefuzz_config)
 
 
 def run_divefuzz(seed_config: GeneratedSeedConfig, seed_config_logger) -> list:
     global _divefuzz_config
+    assert(_divefuzz_config is not None)
     # handle generate
     if seed_config.divefuzz.mode == "generate":
         generate_instructions_parallel(
@@ -80,18 +81,20 @@ def run_divefuzz(seed_config: GeneratedSeedConfig, seed_config_logger) -> list:
             is_cva6=seed_config.divefuzz.is_cva6,
             is_rv32=seed_config.divefuzz.is_rv32,
             max_workers=seed_config.divefuzz.threads,
-            arch=_divefuzz_config.arch if _divefuzz_config else None
+            arch=_divefuzz_config.arch,
+            template_type=seed_config.divefuzz.template_type
         )
 
     elif seed_config.divefuzz.mode == "mutate":
         mutate_instructions_parallel(
-            directory_path=seed_config.divefuzz.mutate_input,
-            mutate_directory=seed_config.divefuzz.seeds_output,
+            directory_path=Path(seed_config.divefuzz.mutate_input) if seed_config.divefuzz.mutate_input else Path.cwd(),
+            mutate_directory=Path(seed_config.divefuzz.seeds_output),
             max_workers=seed_config.divefuzz.threads,
             enable_ext=seed_config.divefuzz.enable_extension,
-            exclude_extensions=seed_config.divefuzz.exclude_extension,
+            exclude_extensions=seed_config.divefuzz.exclude_extension if seed_config.divefuzz.exclude_extension else [],
             eliminate_enable=seed_config.divefuzz.dive_enable,
-            arch=_divefuzz_config.arch if _divefuzz_config else None
+            arch=_divefuzz_config.arch,
+            template_type=seed_config.divefuzz.template_type
         )
     else:
         raise ValueError(f"Unknown mode: {seed_config.divefuzz.mode}")

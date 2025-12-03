@@ -27,6 +27,7 @@ class DiveFuzzArgConfig:
 
     allowed_ext_name: str = 'base'
     architecture: str = 'xs'
+    template_type: str = 'rocket'
 
     instr_number: int = 200
     seeds: int = 10

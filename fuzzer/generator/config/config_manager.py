@@ -26,9 +26,11 @@ class Config:
 
         self.allowed_ext_name = str(args.allowed_ext_name)
         allowed_ext.setup_ext(self.allowed_ext_name)
-
+        
         self.architecture = str(args.architecture)
         bug_filter.set_architecture(self.architecture)
+
+        self.template_type = str(args.template_type)
 
         self.instr_number = int(args.instr_number)
         self.seed_times = int(args.seeds)

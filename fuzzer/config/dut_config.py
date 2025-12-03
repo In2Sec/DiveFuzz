@@ -19,7 +19,7 @@ from config.logger_config import get_global_logger
 
 
 config_logger = get_global_logger(__name__)
-
+# DUT target config
 @dataclass
 class DUTTarget:
     name: str
@@ -36,7 +36,7 @@ class DUTTarget:
             self.threads = 1
             
 
-
+# seed input config
 @dataclass
 class DiveFuzzConfig:
     gen_only: bool
@@ -44,29 +44,30 @@ class DiveFuzzConfig:
     dive_enable: bool
     mode: str
     seeds_output: str
+
+    
+    template_type: str
+    mutate_input: Optional[str] = None
+    enable_extension: bool = True
+    exclude_extension: Optional[List[str]] = None
     
 
-    seeds_num: Optional[int] = None
-    ins_num: Optional[int] = None
+    seeds_num: int = 10
+    ins_num: int = 200
     is_cva6: bool = False
     is_rv32: bool = False
-    
-
-    mutate_input: Optional[str] = None
-    enable_extension: Optional[bool] = None
-    exclude_extension: Optional[List[str]] = None
     
     def __post_init__(self):
         self.seeds_output = os.path.expanduser(self.seeds_output)
         if self.mutate_input:
             self.mutate_input = os.path.expanduser(self.mutate_input)
 
-
+# base class for seed config
 @dataclass
 class SeedConfigBase:
     name: str
 
-
+# predefined seed config
 @dataclass
 class PredefinedSeedConfig(SeedConfigBase):
     path: str
@@ -74,18 +75,19 @@ class PredefinedSeedConfig(SeedConfigBase):
     def __post_init__(self):
         self.path = os.path.expanduser(self.path)
 
-
+# directory seed input config
 @dataclass
 class DirSeedConfig(PredefinedSeedConfig):
+   
     suffix: str
 
-
+# runtime generated seed config
 @dataclass
 class GeneratedSeedConfig(SeedConfigBase):
     input_type: str
     divefuzz: DiveFuzzConfig
 
-
+# main config parser
 @dataclass
 class Config:
     dut_target: DUTTarget

@@ -25,12 +25,12 @@ import random
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# XiangShan M-mode Private Functions (_xs_m_*)
+# XiangShan mode Private Functions
 # ------------------------------------------------------------------------------
 
-def _xs_m_text_startup(p: AsmProgram) -> AsmProgram:
+def _xs_text_startup(p: AsmProgram) -> AsmProgram:
     """
-    [XiangShan M-mode] Build the startup sequence in .text (_start and early jumps):
+    [XiangShan ] Build the startup sequence in .text (_start and early jumps):
     - Read mhartid/core ID
     - Jump to h0_start via jalr
     - Set MISA, kernel stack pointer, trap vector MTVEC, initial MEPC
@@ -55,10 +55,10 @@ def _xs_m_text_startup(p: AsmProgram) -> AsmProgram:
     return p
 
 
-def _xs_m_machine_mode_init(p: AsmProgram) -> AsmProgram:
+def _xs_init(p: AsmProgram) -> AsmProgram:
     """
-    [XiangShan M-mode] Machine mode basic initialization:
-    - Write MSTATUS/MIE
+    [XiangShan] Mode basic initialization:
+    - Write MSTATUS/MIE PMP/PMA
     - Enter init via mret
     """
     p.label(LBL_INIT_ENV)
@@ -67,7 +67,8 @@ def _xs_m_machine_mode_init(p: AsmProgram) -> AsmProgram:
 
     p.li("x26", f"0x{ms_val:016x}")
     p.csrw(CSR.MSTATUS, "x26", comment=f"MSTATUS (mode is {mpp})")
-
+    # Build PMP (Physical Memory Protection) setup.
+    # TODO support more PMP config
     if mpp != 3:
         p.la("x16", LBL_MAIN)
         p.csrw(0x3b0, "x16")
@@ -82,9 +83,9 @@ def _xs_m_machine_mode_init(p: AsmProgram) -> AsmProgram:
     return p
 
 
-def _xs_m_init_sequence(p: AsmProgram) -> AsmProgram:
+def _xs_init_reg(p: AsmProgram) -> AsmProgram:
     """
-    [XiangShan M-mode] init: Initialize floating-point and general-purpose registers.
+    [XiangShan/Rocket] init: Initialize floating-point and general-purpose registers.
     """
     p.label(LBL_INIT)
 
@@ -99,6 +100,7 @@ def _xs_m_init_sequence(p: AsmProgram) -> AsmProgram:
 
     p.instr("fsrmi", str(rm))
 
+    # === General-purpose register initialization ===
     for r in range(16):
         
         rand_val = random.getrandbits(64)
@@ -113,10 +115,32 @@ def _xs_m_init_sequence(p: AsmProgram) -> AsmProgram:
     p.align(12)
     return p
 
+ 
 
-def _xs_m_exception_vector(p: AsmProgram) -> AsmProgram:
+def _nutshell_init_reg(p: AsmProgram) -> AsmProgram:
     """
-    [XiangShan M-mode] other_exp: Simple exception handling (increment mepc by 4, then mret).
+    [XiangShan/Rocket] init: Initialize floating-point and general-purpose registers.
+    """
+    p.label(LBL_INIT)
+
+    # === General-purpose register initialization ===
+    for r in range(16):
+        
+        rand_val = random.getrandbits(64)
+        p.li(f"x{r}", f"0x{rand_val:016x}")
+
+    p.li("t6", "4096")
+
+    p.instr("j", LBL_MAIN)
+
+    p.align(12)
+    return p
+
+
+
+def _exception_vector(p: AsmProgram) -> AsmProgram:
+    """
+    [XiangShan/NutShell/Rocket] other_exp: Simple exception handling (increment mepc by 4, then mret).
     """
     p.label(LBL_OTHER_EXP)
     p.option("norvc")
@@ -128,9 +152,9 @@ def _xs_m_exception_vector(p: AsmProgram) -> AsmProgram:
     return p
 
 
-def _xs_m_data_sections(p: AsmProgram) -> AsmProgram:
+def _init_data_sections(p: AsmProgram) -> AsmProgram:
     """
-    [XiangShan M-mode] Data area and custom sections.
+    [XiangShan/NutShell/Rocket] Data area and custom sections.
     """
     p.section(".data")
     p.directive("align", "6"); p.directive("global", SYM_TOHOST); p.label(SYM_TOHOST)
@@ -159,32 +183,20 @@ def _nutshell_m_text_startup(p: AsmProgram) -> AsmProgram:
     [NutShell M-mode] Build the startup sequence. Uses mtvec_handler instead of other_exp.
     """
     p.globl(LBL_START).section(".text")
+
     p.label(LBL_START)
-    p.csrr("x5", 0xF14)
-    p.li("x6", 0)
-    p.beq("x5", "x6", "0f")
 
-    p.label("0")
-    p.la("x8", LBL_H0_START)
-    p.jalr("x0", "x8", 0)
-
-    p.label(LBL_H0_START)
     p.li("x13", "0x800000000084112d")
     p.csrw(CSR.MISA, "x13")
 
-    p.label(LBL_KERNEL_SP)
-    p.la("x25", SYM_KERNEL_STACK_END)
 
     p.label(LBL_TRAP_VEC_INIT)
-    p.la("x13", LBL_MTVEC_HANDLER)
+    p.la("x13", LBL_OTHER_EXP)
     p.csrw(CSR.MTVEC, "x13", comment="MTVEC")
 
     p.label(LBL_MEPC_SETUP)
     p.la("x13", LBL_INIT)
     p.csrw(CSR.MEPC, "x13")
-
-    p.label(LBL_CUSTOM_CSR_SETUP)
-    p.instr("nop")
     return p
 
 
@@ -192,7 +204,8 @@ def _nutshell_m_machine_mode_init(p: AsmProgram) -> AsmProgram:
     """
     [NutShell M-mode] Machine mode initialization (different MSTATUS value).
     """
-    p.label(LBL_INIT_MACHINE_MODE)
+    p.label(LBL_INIT_ENV)
+    # TODO support more MSTATUS
     p.li("x26", "0xa00101800")
     p.csrw(CSR.MSTATUS, "x26", comment="MSTATUS")
     p.li("x26", "0x0")
@@ -200,31 +213,6 @@ def _nutshell_m_machine_mode_init(p: AsmProgram) -> AsmProgram:
     p.mret()
     return p
 
-
-def _nutshell_m_exception_vector(p: AsmProgram) -> AsmProgram:
-    """
-    [NutShell M-mode] Exception vector with mtvec_handler routing.
-    """
-    p.align(12)
-    p.label(LBL_MTVEC_HANDLER)
-    p.option("norvc")
-    p.instr("j", LBL_MMODE_EXC_HANDLER)
-    p.option("rvc")
-
-    p.label(LBL_MMODE_EXC_HANDLER)
-    p.csrr("x21", 0x343)
-    p.label("1")
-    p.la("x8", LBL_OTHER_EXP)
-    p.jalr("x1", "x8", 0)
-
-    p.label(LBL_OTHER_EXP)
-    p.option("norvc")
-    p.csrr("x13", CSR.MEPC)
-    p.instr("addi", "x13", "x13", "4")
-    p.csrw(CSR.MEPC, "x13")
-    p.mret()
-    p.option("rvc")
-    return p
 
 
 def _nutshell_m_main_with_hook(p: AsmProgram) -> AsmProgram:
@@ -987,27 +975,27 @@ def _common_support_routines(p: AsmProgram) -> AsmProgram:
 # Public Template Build Functions
 # ==============================================================================
 
-def build_template_default_mode(arch: ArchConfig) -> AsmProgram:
+def build_template_xiangshan(arch: ArchConfig) -> AsmProgram:
     """
-    Build complete XiangShan M-mode template.
+    Build complete XiangShan template.
 
-    This template runs in machine mode only with simple exception handling.
+    This template runs in mode only with simple exception handling.
     """
     p = AsmProgram(arch=arch)
 
-    _xs_m_text_startup(p)
-    _xs_m_machine_mode_init(p)
-    _xs_m_init_sequence(p)
-    _xs_m_exception_vector(p)
+    _xs_text_startup(p)
+    _xs_init(p)
+    _xs_init_reg(p)
+    _exception_vector(p)
     # _common_test_done(p)
     _common_main_with_hook(p)
     _common_support_routines(p)
-    _xs_m_data_sections(p)
+    _init_data_sections(p)
 
     return p
 
 
-def build_template_nutshell_m_mode(arch: ArchConfig) -> AsmProgram:
+def build_template_nutshell(arch: ArchConfig) -> AsmProgram:
     """
     Build complete NutShell M-mode template.
 
@@ -1017,17 +1005,17 @@ def build_template_nutshell_m_mode(arch: ArchConfig) -> AsmProgram:
 
     _nutshell_m_text_startup(p)
     _nutshell_m_machine_mode_init(p)
-    _xs_m_init_sequence(p)  # Reuse XiangShan init sequence
-    _nutshell_m_exception_vector(p)
-    _common_test_done(p)
+    _nutshell_init_reg(p)  
+    _exception_vector(p)
+    # _common_test_done(p)
     _nutshell_m_main_with_hook(p)
     _common_support_routines(p)
-    _xs_m_data_sections(p)  # Reuse XiangShan data sections
+    _init_data_sections(p)  
 
     return p
 
 
-def build_template_xs_s_mode(arch: ArchConfig) -> AsmProgram:
+def build_template_rocket(arch: ArchConfig) -> AsmProgram:
     """
     Build complete XiangShan S-mode template.
 
@@ -1035,24 +1023,29 @@ def build_template_xs_s_mode(arch: ArchConfig) -> AsmProgram:
     """
     p = AsmProgram(arch=arch)
 
-    _s_mode_text_startup(p)
-    _s_mode_pmp_setup(p)
-    _s_mode_mepc_setup(p)
-    _s_mode_supervisor_init(p)
-    _s_mode_init_sequence(p)
-    _s_mode_exception_vector(p)
-    _s_mode_main_with_hook(p)
-    _common_support_routines(p)
-    _s_mode_data_sections(p)
+    if random.random() < 0:
+        _xs_text_startup(p)
+        _s_mode_pmp_setup(p)
+        _s_mode_mepc_setup(p)
+        _s_mode_supervisor_init(p)
+        _s_mode_init_sequence(p)
+        _exception_vector(p)
+        _s_mode_main_with_hook(p)
+        _common_support_routines(p)
+        _s_mode_data_sections(p)
+    else:
+        _xs_text_startup(p)
+        _xs_init(p)
+        _xs_init_reg(p)
+        _exception_vector(p)
+        _common_main_with_hook(p)
+        _common_support_routines(p)
+        _init_data_sections(p)
+
 
     return p
 
 
-def build_template_testxs_s_mode(arch: ArchConfig) -> AsmProgram:
-    """
-    Build TestXS S-mode template (same structure as XiangShan S-mode).
-    """
-    return build_template_xs_s_mode(arch)
 
 
 def build_template_testxs_u_mode(arch: ArchConfig) -> AsmProgram:
@@ -1073,47 +1066,12 @@ def build_template_testxs_u_mode(arch: ArchConfig) -> AsmProgram:
     _u_mode_stvec_handler(p)
     _u_mode_mtvec_handler(p)
     _u_mode_exception_handlers(p)
-    _common_test_done(p)
+    # _common_test_done(p)
     _common_main_with_hook(p)
     _common_support_routines(p)
     _u_mode_data_sections(p)
 
     return p
-
-
-# ==============================================================================
-# Template Factory Function
-# ==============================================================================
-
-def build_template(template_type: "TemplateType", arch: ArchConfig) -> AsmProgram:
-    """
-    Factory function to build template based on type.
-
-    Args:
-        template_type: The type of template to build (from TemplateType enum)
-        arch: Architecture configuration (RV32/RV64, ISA extensions)
-
-    Returns:
-        AsmProgram with the complete template
-
-    Raises:
-        ValueError: If template_type is unknown
-    """
-    from .constants import TemplateType
-
-    builders = {
-        TemplateType.DEFAULT_MODE: build_template_default_mode,
-        # TemplateType.XIANGSHAN_S_MODE: build_template_xs_s_mode,
-        # TemplateType.NUTSHELL_M_MODE: build_template_nutshell_m_mode,
-        # TemplateType.TESTXS_S_MODE: build_template_testxs_s_mode,
-        # TemplateType.TESTXS_U_MODE: build_template_testxs_u_mode,
-    }
-
-    builder = builders.get(template_type)
-    if builder is None:
-        raise ValueError(f"Unknown template type: {template_type}")
-
-    return builder(arch)
 
 
 def random_mstatus_rv64_h():
@@ -1159,12 +1117,45 @@ def random_mstatus_rv64_h():
 
 
 # ==============================================================================
+# Template Factory Function
+# ==============================================================================
+
+def build_template(template_type: TemplateType, arch: ArchConfig) -> AsmProgram:
+    """
+    Factory function to build template based on type.
+
+    Args:
+        template_type: The type of template to build (from TemplateType enum)
+        arch: Architecture configuration (RV32/RV64, ISA extensions)
+
+    Returns:
+        AsmProgram with the complete template
+
+    Raises:
+        ValueError: If template_type is unknown
+    """
+
+    builders = {
+        TemplateType.XIANGSHAN: build_template_xiangshan,
+        TemplateType.NUTSHELL: build_template_nutshell,
+        TemplateType.ROCKET: build_template_rocket,
+        # TemplateType.TESTXS_U_MODE: build_template_testxs_u_mode,
+    }
+
+    builder = builders.get(template_type, None)
+    if builder is None:
+        raise ValueError(f"Unknown template type: {template_type}")
+
+    return builder(arch)
+
+
+# ==============================================================================
 # Template Instance Factory Function
 # ==============================================================================
 
 def create_template_instance(
     arch: ArchConfig,
-    template_type: "TemplateType" = None
+    template_type: str
 ) -> TemplateInstance:
     """
     Factory function to create a fresh template instance with random values.
@@ -1179,21 +1170,17 @@ def create_template_instance(
     Returns:
         TemplateInstance ready for use with independently generated random content
     """
-    
 
-    if template_type is None:
-        # Exclude TESTXS_U_MODE as it causes Spike to hang during verification
-        # due to page table setup issues in U-mode simulation
-        available_types = [t for t in TemplateType]
-        template_type = random.choice(available_types)
 
-    program = build_template(template_type, arch)
+    template_type_enum = TemplateType(template_type)
+
+    program = build_template(template_type_enum, arch)
     hook_idx = program.get_hook_idx(HOOK_MAIN)
 
     return TemplateInstance(
         header = program.render_slice(0, hook_idx),
         footer = program.render_slice(hook_idx + 1, len(program.nodes)),
-        template_type = template_type,
+        template_type = template_type_enum,
         isa = arch.get_isa(),
         arch_bits = arch.get_arch_bits()
     )

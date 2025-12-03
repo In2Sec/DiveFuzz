@@ -26,10 +26,11 @@ logger = logging.getLogger(__name__)
 def mutate_instructions_parallel(directory_path: Path,
                                  mutate_directory: Path,
                                  max_workers: int,
-                                 enable_ext: bool = False,
-                                 exclude_extensions: List[str] = [],
-                                 eliminate_enable: bool = False,
-                                 arch: ArchConfig = None):
+                                 enable_ext: bool,
+                                 exclude_extensions: List[str],
+                                 eliminate_enable: bool,
+                                 arch: ArchConfig,
+                                 template_type: str):
     """
     Mutate instructions in parallel across multiple processes.
 
@@ -63,7 +64,8 @@ def mutate_instructions_parallel(directory_path: Path,
                 enable_ext,
                 exclude_extensions,
                 eliminate_enable,
-                arch
+                arch,
+                template_type
             ) for file_path, content in processed_data.items()
         ]
 

@@ -39,7 +39,7 @@ seeds:
     is_cva6: false
     # Special instruction generation for rv32
     is_rv32: false
-
+    template_type: 'xiangshan'
     # # The following features are only effective when the mode is set to mutate
     # # In mutation mode, the path to the initial corpus
     # mutate_input: /path/seeds_output_inst_100

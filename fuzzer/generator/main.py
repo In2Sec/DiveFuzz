@@ -45,7 +45,8 @@ def main():
             config.is_cva6,
             config.is_rv32,
             config.max_workers,
-            config.arch
+            config.arch,
+            config.template_type
         )
 
     # Whether to enable out-of-order mutation, considering previously unseen extension instructions
@@ -57,7 +58,8 @@ def main():
             config.enable_ext,
             config.exclude_extensions,
             config.eliminate_enable,
-            config.arch
+            config.arch,
+            config.template_type
         )
 
 

@@ -14,7 +14,7 @@
 from .manager import temp_file_manager, TempFileManager
 from .template_instance import TemplateInstance
 from .template_builder import create_template_instance, build_template
-from .constants import TemplateType, DEFAULT_TEMPLATE_TYPE
+from .constants import TemplateType
 from .riscv_asm_syntex import ArchConfig
 
 __all__ = [
@@ -24,6 +24,5 @@ __all__ = [
     "create_template_instance",
     "build_template",
     "TemplateType",
-    "DEFAULT_TEMPLATE_TYPE",
     "ArchConfig",
 ]

@@ -17,7 +17,7 @@ from .special_probabilities import SPECIAL_PROB_PROFILES
 class AllowedEXT:
     
     def __init__(self):
-        self.EXT_NAMES = tuple(ALLOWED_EXT_PROFILES.keys())  
+        self.EXT_NAMES = tuple(ALLOWED_EXT_PROFILES.keys())  # ('cva6', 'cva6_cascade', 'rv32', 'general', 'base', 'nutshell')
         self.special_probabilities = {}
         self.allowed_ext = []
     

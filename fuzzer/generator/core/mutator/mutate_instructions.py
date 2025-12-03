@@ -41,10 +41,11 @@ def process_content(file_path: str,
                     file_content: str,
                     directory_path: Path,
                     mutate_directory: Path,
-                    enable_ext: bool = False,
-                    exclude_extensions: List[str] = [],
-                    eliminate_enable: bool = False,
-                    arch: ArchConfig = None):
+                    enable_ext: bool,
+                    exclude_extensions: List[str],
+                    eliminate_enable: bool,
+                    arch: ArchConfig,
+                    template_type: str):
     """
     Process and mutate instructions in a single file.
 
@@ -59,7 +60,7 @@ def process_content(file_path: str,
         arch: Architecture configuration for template creation
     """
     # Create fresh template instance for this mutated file with random type and values
-    template = create_template_instance(arch)
+    template = create_template_instance(arch, template_type)
 
     instruction_freq = count_instructions({file_path: file_content})
     increase_queue, decrease_queue, classified_instructions, geometric_means, missing_ext = classify_instructions(instruction_freq)
