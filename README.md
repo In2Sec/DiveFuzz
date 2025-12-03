@@ -94,12 +94,10 @@ export PATH="$(pwd)/riscv-isa-sim-adapter/build:${PATH}"
 
 Enter your DUT directory and build the emulator with:
 ```shell
-make emu   # run 'make --help' to view available options
+export NOOP_HOME="$(pwd)"
+make emu   
 ```
-For Rocket, switch to the Difftest-compatible branch before building:
-```shell
-git checkout -b dev-difftest
-```
+
 
 
 ## Usage Example
