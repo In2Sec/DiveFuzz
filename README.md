@@ -79,6 +79,8 @@ cd ../..
 
 ## Environment Setup
 
+### REF Configuration
+
 To ensure that the system can locate the `spike` executable you just built, you need to add its path to your shell's `PATH` variable.
 
 ```shell
@@ -87,6 +89,18 @@ export PATH="$(pwd)/riscv-isa-sim-adapter/build:${PATH}"
 ```
 
 **Important**: You need to re-run this command every time you open a new terminal session.
+
+### DUT Configuration
+
+Enter your DUT directory and build the emulator with:
+```shell
+make emu   # run 'make --help' to view available options
+```
+For Rocket, switch to the Difftest-compatible branch before building:
+```shell
+git checkout -b dev-difftest
+```
+
 
 ## Usage Example
 
