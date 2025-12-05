@@ -3,3 +3,4 @@ numpy~=2.2.4
 psutil~=7.0.0
 PyYAML~=5.4.1
 tqdm~=4.67.1
+pybind11~=3.0.1
