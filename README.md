@@ -16,8 +16,8 @@ cd DiveFuzz
 Clone the runtime-diversified version of riscv-isa-sim adapted for DiveFuzz as a `git submodule`
 
 ```
-git submodule init riscv-isa-sim-adapter
-git submodule update riscv-isa-sim-adapter
+git submodule init ref/riscv-isa-sim-adapter
+git submodule update ref/riscv-isa-sim-adapter
 ```
 
 Navigate to the dut directory and select your target RISC-V CPU for testing. **If you already have the target existing, you can skip this step.**
@@ -36,6 +36,8 @@ git submodule init XiangShan
 *DiveFuzz using RISC-V toolchain to generate test cases. For base usage, the following dependencies are required: `riscv64-unknown-elf-*`*
 
 You can obtain the toolchain by following the instructions [here](https://github.com/riscv-collab/riscv-gnu-toolchain). We need the `newlib` version of the toolchain, which prefixes with `riscv64-unknown-elf-`, designed for embedded applications and bare metal development.
+
+We recommend version 2025.11.27; Older versions may have issues with certain extensions not being supported.
 
 
 ### Spike RISC-V ISA simulator
@@ -64,17 +66,15 @@ make
 Assumes you have Python and pip installed, with a Python version **of** 3.10 **or newer**.Then install the necessary Python packages using pip:
 
 ```shell
-cd fuzzer
+cd DiveFuzz
 pip install -r requirements.txt
-cd ..
 ```
 
 Then, build the Spike C/C++ and python wrapper
 
 ```shell
-cd riscv-isa-sim-adapter/spike_wrapper
+cd ref/riscv-isa-sim-adapter/spike_wrapper
 make
-cd ../..
 ```
 
 ## Environment Setup
