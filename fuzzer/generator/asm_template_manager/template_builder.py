@@ -108,7 +108,7 @@ def _xs_init_reg(p: AsmProgram) -> AsmProgram:
         op = random.choice(["fmv.h.x", "fmv.w.x", "fmv.d.x"])
         p.instr(op, f"f{r}", f"x{r}")
 
-    p.li("t6", "4096")
+    p.li("t6", "0x80000000")
 
     p.instr("j", LBL_MAIN)
 
@@ -129,7 +129,7 @@ def _nutshell_init_reg(p: AsmProgram) -> AsmProgram:
         rand_val = random.getrandbits(64)
         p.li(f"x{r}", f"0x{rand_val:016x}")
 
-    p.li("t6", "4096")
+    p.li("t6", "0x80000000")
 
     p.instr("j", LBL_MAIN)
 
