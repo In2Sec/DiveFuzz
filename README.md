@@ -9,7 +9,7 @@ DiveFuzz is a diversified instruction generation approach designed specifically 
 Clone the main repository
 
 ```
-git clone https://github.com/youzi27/DiveFuzz
+git clone https://github.com/In2Sec/DiveFuzz
 cd DiveFuzz
 ```
 
