@@ -65,6 +65,8 @@ def setup_divefuzz(seed_config: GeneratedSeedConfig, global_logger):
         enable_ext=seed_config.divefuzz.enable_extension,
         exclude_ext=seed_config.divefuzz.exclude_extension if seed_config.divefuzz.exclude_extension else [],
         template_type=seed_config.divefuzz.template_type,
+        allowed_ext_name=seed_config.divefuzz.allowed_ext_name,
+        architecture=seed_config.divefuzz.architecture,
     )
     _divefuzz_config = setup_config(divefuzz_config)
 
@@ -82,7 +84,9 @@ def run_divefuzz(seed_config: GeneratedSeedConfig, seed_config_logger) -> list:
             is_rv32=seed_config.divefuzz.is_rv32,
             max_workers=seed_config.divefuzz.threads,
             arch=_divefuzz_config.arch,
-            template_type=seed_config.divefuzz.template_type
+            template_type=seed_config.divefuzz.template_type,
+            out_dir=str(_divefuzz_config.out_dir),
+            architecture=_divefuzz_config.architecture
         )
 
     elif seed_config.divefuzz.mode == "mutate":
@@ -105,25 +109,26 @@ def run_divefuzz(seed_config: GeneratedSeedConfig, seed_config_logger) -> list:
 
 def process_divefuzz_asm(seed_config: GeneratedSeedConfig, seed_config_logger):
 
-    # Generator outputs to cwd/out-seeds by default
-    generator_output_dir = Path.cwd() / 'out-seeds'
+    # Use the configured seeds_output directory
+    generator_output_dir = Path(seed_config.divefuzz.seeds_output)
 
     # convert img/elf
     seed_config_logger.info("Converting assembly to elf files...")
     process_assembly_files(str(generator_output_dir))
 
-    # find elf
-    elf_dir = generator_output_dir / 'elf_file'
-    if not elf_dir.exists():
-        seed_config_logger.error(f"ELF directory not found: {elf_dir}")
+    # find img files (binary format for DUT execution)
+    # All DUTs (NutShell, Rocket, XiangShan) use .img format
+    img_dir = generator_output_dir / 'img_file'
+    if not img_dir.exists():
+        seed_config_logger.error(f"IMG directory not found: {img_dir}")
         return []
 
     seed_files = []
-    for file in os.listdir(elf_dir):
-        if file.endswith(".elf"):
-            seed_files.append(os.path.join(elf_dir, file))
+    for file in os.listdir(img_dir):
+        if file.endswith(".img"):
+            seed_files.append(os.path.join(img_dir, file))
 
     seed_config_logger.info(
-        f"Found {len(seed_files)} generated seed files")
+        f"Found {len(seed_files)} generated seed files (.img)")
 
     return seed_files

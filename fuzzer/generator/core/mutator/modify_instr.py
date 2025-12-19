@@ -34,7 +34,8 @@ def modify_instruction_dec(ori_instr, rand_instr, increase_prob, extension):
     instr_format = INSTRUCTION_FORMATS.get(extension, {}).get(instr_key, {})
     format_str = instr_format.get("format", "")
     variables = instr_format.get("variables", [])
-
+    # ...
+    # Parse format strings and build mapping
     format_to_instr_map = {}
     format_parts = re.split(r'(\{[^}]*\})', format_str)  
     part_index = 1
@@ -74,7 +75,7 @@ def modify_instruction_dec(ori_instr, rand_instr, increase_prob, extension):
 
 
 def modify_instruction_inc(ori_instr, increase_prob, extension):
-   
+    # Only modify operand registers and immediates, etc.
 
     extension = extension.upper()
     special_registers = ['ra', 'sp', 'gp', 'tp']
@@ -84,45 +85,47 @@ def modify_instruction_inc(ori_instr, increase_prob, extension):
         return ori_instr
 
     instr_parts = ori_instr.split()
-    
+    # Check if there is a section label
     instr_key_index = 1 if ':' in instr_parts[0] else 0
     instr_key = instr_parts[instr_key_index]
 
     instr_format = INSTRUCTION_FORMATS.get(extension, {}).get(instr_key, {})
     format_str = instr_format.get("format", "")
     variables = instr_format.get("variables", [])
-    
+    # Parse format strings and build mapping
     format_to_instr_map = {}
     format_parts = re.split(r'(\{[^}]*\})', format_str) 
-    part_index = 1 + instr_key_index 
+    part_index = 1 + instr_key_index # Filter out section labels
     for part in format_parts:
         if part.startswith('{') and part.endswith('}'):
             var_name = part[1:-1]
             if var_name in variables:
-                
+                # Check if part_index is within the range of instr_parts
                 if part_index < len(instr_parts):
-                    
+                    # Special handling for cases with parentheses
                     if '(' in instr_parts[part_index] and ')' in instr_parts[part_index]:
                         imm_rs1_part = instr_parts[part_index]
                         match_result = re.match(r'([^(]*)\(([^)]+)\)', imm_rs1_part)
                         if match_result:
                             imm, rs1 = match_result.groups()
-                           
+                            # Check if imm is empty; if so, set it to 0
                             imm = imm if imm else '0'
-                        else: 
-                            
+                        else: # Never run
+                            # If no match is found, print an error or handle the exception accordingly
                             print(f"Unexpected format encountered in instruction: {instr_parts}")
-                            
+                            # Or set a default value and continue
                             imm = '0'
-                            rs1 = 'UNDEFINED'  
-                        if var_name == variables[0]:  
+                            rs1 = 'UNDEFINED'  # Need to decide how to handle this case
+                        # Assigning values ​​for IMM and RS1
+                        if var_name == variables[0]:  # Assume IMM always comes before RS1
                             format_to_instr_map[var_name] = imm
-                            continue 
+                            continue  # Continue with the next loop iteration to avoid part_index being incorrectly incremented
                         elif var_name == variables[1]:
                             format_to_instr_map[var_name] = rs1
                     else:
                         format_to_instr_map[var_name] = instr_parts[part_index]
                 else:
+                    # If part_index is out of range, assign a default value or perform error handling
                     format_to_instr_map[var_name] = None
                 part_index += 1
 
