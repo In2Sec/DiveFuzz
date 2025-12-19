@@ -51,7 +51,7 @@ def main():
             config.architecture
         )
 
-    # # Whether to enable out-of-order mutation, considering previously unseen extension instructions
+    # Whether to enable out-of-order mutation, considering previously unseen extension instructions
     if config.mutation_enable:
         mutate_instructions_parallel(
             config.directory_path,
