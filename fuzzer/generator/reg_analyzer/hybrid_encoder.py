@@ -179,7 +179,7 @@ if __name__ == "__main__":
         result = encoder.encode_to_hex(inst)
         print(f"  {inst:30s} -> {result}")
 
-    # 打印统计
+    
     encoder.print_stats()
 
     print("\nNote: For testing fallback with P/B extension instructions,")
