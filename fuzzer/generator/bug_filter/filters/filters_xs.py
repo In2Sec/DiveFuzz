@@ -19,4 +19,5 @@ def register(reg: Registry) -> None:
     pass
     # During testing, known bugs can be avoided; for example, a division by zero error can be avoided.
     # add_bug(reg, 'div',  'div by zero',      '*', '0')
-    # add_bug(reg, 'wfi',  'wfi is disabled')
+    # add_bug(*, 'wfi',  'wfi is disabled')
+    # add_bug(reg, 'fsqrt', 'INF', '0x7f7fffff')
