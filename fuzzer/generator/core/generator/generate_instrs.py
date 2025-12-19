@@ -156,7 +156,7 @@ def generate_instructions(instr_number: int,
             v_ext_enable = False
 
         if v_ext_enable:
-            v_instr_init = generate_random_vsetvli_instruction()
+            # v_instr_init 
             entire_instrs.append(v_instr_init)
         # TO rv32
         for i in range(instr_number):
