@@ -13,10 +13,10 @@
 
 import re
 import random
-from .instr_config import special_instr
-from .instr_formats import INSTRUCTION_FORMATS
-from .instr_sets import INSTRUCTION_SETS
-from .instr_var import variable_range
+from .config import special_instr
+from .formats import INSTRUCTION_FORMATS
+from .sets import INSTRUCTION_SETS
+from .variables import variable_range
 from .memory_manager import MemoryAccessManager
 
 def gen_imm(imm_type, length):
@@ -94,7 +94,15 @@ def gen_imm(imm_type, length):
 
     return imm
 
-
+# TODO
+def generate_random_v_instruction():
+    """
+    Generates a random v instruction in assembly format.
+    Returns:
+        str: A randomly generated v instruction.
+    """
+    
+    return None
 
 
 def get_instruction_type(instruction):
@@ -252,7 +260,7 @@ def generate_new_instr(new_instr_op, extension, rd_history, rs_history,\
 
 
 
-    # FOR CVA6 TEST
+# FOR CVA6 TEST
     # To avoid some spec different cva6 and spike ,
     # spike forbidden write senvcfg and scounteren
     if 'senvcfg' in new_instr or 'scounteren' in new_instr:

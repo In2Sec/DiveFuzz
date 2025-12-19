@@ -77,11 +77,14 @@ def process_folders(img_folder):
     total_files = len(img_files)
 
 
+
+    # Traverse all .img files in the img folder
     for i, filename in enumerate(img_files):
         base_name = os.path.splitext(filename)[0]
         asm_file = base_name + '.S'
         asm_file_path = os.path.join(asm_folder, asm_file)
 
+        # If the .S file exists, process it
         if os.path.exists(asm_file_path):
             new_file_path = os.path.join(target_folder, asm_file)
             modify_assembly_code(asm_file_path, new_file_path)

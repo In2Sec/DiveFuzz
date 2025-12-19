@@ -64,7 +64,13 @@ def _xs_init(p: AsmProgram) -> AsmProgram:
     p.label(LBL_INIT_ENV)
     ms_val = random_mstatus_rv64_h()
     mpp = (ms_val >> 11) & 0b11  
-
+    # mode_map = {
+    #     0: "U-mode",
+    #     1: "S-mode",
+    #     3: "M-mode",
+    # }
+    # ret_mode = mode_map.get(mpp, "RESERVED")
+    # Load and write MSTATUS
     p.li("x26", f"0x{ms_val:016x}")
     p.csrw(CSR.MSTATUS, "x26", comment=f"MSTATUS (mode is {mpp})")
     # Build PMP (Physical Memory Protection) setup.
@@ -89,10 +95,13 @@ def _xs_init_reg(p: AsmProgram) -> AsmProgram:
     """
     p.label(LBL_INIT)
 
+    # Large probability group: valid rounding modes 0~4
     major_modes = [0, 1, 2, 3, 4]
 
+    # Small probability group: reserved modes 5~7
     minor_modes = [5, 6, 7]
 
+    # Choose group (e.g., 95% vs 5%)
     if random.random() < 0.95:
         rm = random.choice(major_modes)
     else:
@@ -105,10 +114,14 @@ def _xs_init_reg(p: AsmProgram) -> AsmProgram:
         
         rand_val = random.getrandbits(64)
         p.li(f"x{r}", f"0x{rand_val:016x}")
+        # choose a random fmv instruction: h.x / w.x / d.x
         op = random.choice(["fmv.h.x", "fmv.w.x", "fmv.d.x"])
+
+        # write to floating-point register f0 ~ f15
         p.instr(op, f"f{r}", f"x{r}")
 
-    p.li("t6", "0x80000000")
+    # To Store/Load - use valid memory region address
+    p.la("t6", SYM_MEM_REGION)
 
     p.instr("j", LBL_MAIN)
 
@@ -123,13 +136,17 @@ def _nutshell_init_reg(p: AsmProgram) -> AsmProgram:
     """
     p.label(LBL_INIT)
 
+    
+
     # === General-purpose register initialization ===
     for r in range(16):
-        
+
         rand_val = random.getrandbits(64)
         p.li(f"x{r}", f"0x{rand_val:016x}")
 
-    p.li("t6", "0x80000000")
+
+    # To Store/Load - use valid memory region address
+    p.la("t6", SYM_MEM_REGION)
 
     p.instr("j", LBL_MAIN)
 
@@ -170,6 +187,12 @@ def _init_data_sections(p: AsmProgram) -> AsmProgram:
     rand_words = [f"0x{random.getrandbits(32):08x}" for _ in range(8)]
     p.data_word(*rand_words)
 
+    # Add mem_region for NutShell compatibility
+    p.section(".mem_region", flags="aw", sect_type="@progbits")
+    p.align(4)
+    p.label(SYM_MEM_REGION)
+    p.data_space(8192)
+    p.label(SYM_MEM_REGION_END)
 
     return p
 
@@ -217,15 +240,15 @@ def _nutshell_m_machine_mode_init(p: AsmProgram) -> AsmProgram:
 
 def _nutshell_m_main_with_hook(p: AsmProgram) -> AsmProgram:
     """
-    [NutShell M-mode] Main section with csrrwi instruction after hook.
+    [NutShell M-mode] Main section with hook.
     """
     p.align(2)
     p.option("norvc")
 
     p.label(LBL_MAIN)
     p.hook(HOOK_MAIN)
+    p.fourbyte("0x0000006b")
 
-    p.instr("csrrwi", "t0", "mhpmevent25", "1")
     p.option("rvc")
     return p
 

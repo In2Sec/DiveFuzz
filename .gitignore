@@ -6,9 +6,12 @@ fuzzer/spike_resolution/
 fuzzer/generator/out*
 fuzzer/generator/spike_resolution/
 fuzzer/generator/xor_values
+*.so
+*.o
 *.pyc
 __pycache__/
 fuzzer/build
 .vscode
 fuzzer/*.yaml
 outputs
+.txt

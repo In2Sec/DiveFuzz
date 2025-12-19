@@ -30,10 +30,14 @@ from .modify_instr import (
     modify_instruction_dec,
     modify_instruction_inc,
 )
-from ...reg_analyzer import temp_asm_to_debug
 from ...asm_template_manager import create_template_instance, TemplateInstance
 from ...asm_template_manager.riscv_asm_syntex import ArchConfig
 from ...utils import list2str_without_indent
+from ...reg_analyzer.nop_template_gen import generate_nop_elf
+from ...reg_analyzer.spike_session import SpikeSession, SPIKE_ENGINE_AVAILABLE
+from ...reg_analyzer.instruction_validator import InstructionValidator
+from ...config.config_manager import MAX_MUTATE_TIME
+from ...bug_filter import bug_filter
 
 
 # Initial mutation, search within the current extension set.
@@ -61,6 +65,42 @@ def process_content(file_path: str,
     """
     # Create fresh template instance for this mutated file with random type and values
     template = create_template_instance(arch, template_type)
+
+    # Initialize Spike session for eliminate mode (similar to generate_instructions)
+    spike_session = None
+    validator = None
+    shared_xor_cache = {}  # Local XOR cache for mutation
+
+    if eliminate_enable and SPIKE_ENGINE_AVAILABLE:
+        try:
+            # Estimate instruction count from file content
+            instr_count = len([line for line in file_content.split('\n')
+                             if line.strip() and not line.strip().startswith('#')
+                             and ':' not in line.strip()[0:1]])
+
+            # Generate NOP ELF template
+            import tempfile
+            with tempfile.NamedTemporaryFile(suffix='.elf', delete=False) as tmp:
+                elf_path = tmp.name
+            elf_path = generate_nop_elf(template, instr_count, elf_path)
+
+            spike_session = SpikeSession(
+                elf_path,
+                template.isa,
+                instr_count,
+                shared_xor_cache
+            )
+
+            if spike_session.initialize():
+                validator = InstructionValidator(spike_session)
+            else:
+                spike_session = None
+                validator = None
+
+        except Exception as e:
+            print(f"[Mutate] Failed to initialize Spike session: {e}")
+            spike_session = None
+            validator = None
 
     instruction_freq = count_instructions({file_path: file_content})
     increase_queue, decrease_queue, classified_instructions, geometric_means, missing_ext = classify_instructions(instruction_freq)
@@ -105,50 +145,59 @@ def process_content(file_path: str,
         instr_type = get_instruction_type(instr_name)
         instr_format = INSTRUCTION_FORMATS.get(instr_type.upper(), {}).get(instr_name, {})
 
-
+        # TODO: Add register value checking!
         if instr_name in increase_queue:
             prob = instr_probabilities.get(instr_name, 0.5)
             if random.random() < prob:
-                flag_special_instr = False
-                if eliminate_enable:
+                if eliminate_enable and validator is not None:
+                    # Check if instruction needs special handling (skip validation)
                     if  'LABEL' in get_instruction_format(instr_name).get('variables', []) or 'LOAD' in get_instruction_format(instr_name).get('category', []) \
                         or 'STORE' in get_instruction_format(instr_name).get('category', []) or 'JUMP' in get_instruction_format(instr_name).get('category', []) \
                         or 'BRANCH' in get_instruction_format(instr_name).get('category', []) or 'LOAD_SP' in get_instruction_format(instr_name).get('category', []) \
                         or 'STORE_SP' in get_instruction_format(instr_name).get('category', []):
                         updated_content.append(line)
-                        flag_special_instr = True
                     else:
-                        
-                        with ThreadPoolExecutor(max_workers=2) as executor:
-                            is_diff_rs = 0
-                            mutate_time = 0
+                        # Use validator for instruction validation (similar to generate_instructions)
+                        is_diff_rs = 0
+                        mutate_time = 0
 
-                            while is_diff_rs == 0 and mutate_time < 20:
-                                # Note: If the temp_asm_to_debug function directly modifies updated_content, 
-                                # thread safety issues need to be considered.
-                                modified_instr = modify_instruction_inc(line, prob, get_instruction_type(instr_name))
-                                future = executor.submit(temp_asm_to_debug, tuple(updated_content), modified_instr, True)
-                                is_diff_rs = future.result()
-                                mutate_time += 1
-                                if is_diff_rs == 3:
-                                    break
-                                elif is_diff_rs == 1:
-                                    # Assume the condition is met when is_diff_rs equals 1, 
-                                    # update updated_content or perform other processing
-                                    # Note: thread safety must be handled here
+                        while is_diff_rs == 0 and mutate_time < MAX_MUTATE_TIME:
+                            modified_instr = modify_instruction_inc(line, prob, get_instruction_type(instr_name))
+
+                            # Validate with checkpoint-based validator
+                            # NEW: validator returns (xor_value, dest_values, source_values)
+                            xor_value, dest_values, source_values = validator.validate_instruction(modified_instr)
+                            if xor_value is not None:
+                                # Unique XOR, check bug filter
+                                opcode = modified_instr.strip().split()[0] if modified_instr.strip() else "unknown"
+
+                                # Check for known bugs using actual register values
+                                bug_name = bug_filter.filter_known_bug(opcode, dest_values, source_values)
+                                if bug_name:
+                                    # Triggers known bug, restore and retry
+                                    spike_session.restore_checkpoint_and_reset()
+                                    mutate_time += 1
+                                else:
+                                    # Valid instruction, accept it
+                                    spike_session.confirm_instruction(xor_value, modified_instr, opcode=opcode)
                                     updated_content.append(segment_label + modified_instr)
-                                    pass
+                                    is_diff_rs = 1
+                            else:
+                                # Duplicate XOR, retry
+                                mutate_time += 1
+
+                        if mutate_time >= MAX_MUTATE_TIME:
+                            # Failed to find unique instruction, keep original
+                            updated_content.append(line)
                 else:
                     modified_instr = modify_instruction_inc(line, prob, get_instruction_type(instr_name))
                     updated_content.append(segment_label + modified_instr)
-                # if flag_special_instr:
-                    # updated_content.append(segment_label + modified_instr)
 
             else:
                 updated_content.append(line)
         # Instructions to be reduced
         elif instr_name in decrease_queue:
-           
+            # Check whether the instruction contains the 'LABEL' variable
             if 'LABEL' not in instr_format.get('variables', []):
                 prob = instr_probabilities.get(instr_name, 0.5)
                 if random.random() < prob:
@@ -159,7 +208,9 @@ def process_content(file_path: str,
                         updated_content.append(segment_label + "")
                         pass
                     elif (prob_choose_stgy < 0.1 and enable_ext) or not enable_ext:
-
+                        # Randomly select an instruction from the addition queue that does not contain LABEL
+                        # Randomly select an instruction from the addition queue that does not contain STORE
+                        # Randomly select an instruction from the addition queue that does not contain LOAD
                         # TODO Two strategies: should we add it to a specific extension that has not appeared yet?
                         no_label_increase_queue = [instr for instr in increase_queue if 'LABEL' not in get_instruction_format(instr).get('variables', []) \
                                                                                 and 'LOAD' not in get_instruction_format(instr).get('category', []) \
@@ -200,8 +251,13 @@ def process_content(file_path: str,
 
     new_file_path = os.path.join(mutate_directory, new_filename)
     
-
+    # TODO use template rather than replace content
+    # replace_content(file_path, updated_content, new_file_path)  # Assume updated_content is a list of strings
     write_instructions_to_file(new_file_path, list2str_without_indent(updated_content), template)
+
+    # Cleanup Spike session
+    if spike_session is not None:
+        spike_session.cleanup()
 
     return f"Processed {base_filename}"
 
@@ -227,8 +283,8 @@ def count_instructions(processed_data):
     freq_counter = {}
     # Update the regular expression to match instructions containing numbers and decimal points
     instruction_pattern = re.compile(r'^\s*[^:\s]*:\s*([\w.]+)|^\s*([\w.]+)', re.MULTILINE) 
-    # instruction_pattern = re.compile(r'^\s*_[a-zA-Z0-9]+:\s*([^\s].*?)(?=\s\s)', re.MULTILINE) # difuzz-rtl
-    # instruction_pattern = re.compile(r'^\s*([\w.]+)\s*|(^\s*$)', re.MULTILINE) # difuzz-rtl
+    #instruction_pattern = re.compile(r'^\s*_[a-zA-Z0-9]+:\s*([^\s].*?)(?=\s\s)', re.MULTILINE) # difuzz-rtl
+    #instruction_pattern = re.compile(r'^\s*([\w.]+)\s*|(^\s*$)', re.MULTILINE) # difuzz-rtl
 
     for _, content in processed_data.items():
         matches = instruction_pattern.findall(content)
@@ -256,12 +312,12 @@ def calculate_probabilities_z_score_full(counts, mean, std, min_prob=0.3, max_pr
 
 def get_label_from_instruction(instruction, extension):
     instr_parts = instruction.split()
-    instr_key = instr_parts[0]  
+    instr_key = instr_parts[0]  # The keyword of the instruction, such as 'c.j'
 
     instr_format = INSTRUCTION_FORMATS.get(extension, {}).get(instr_key, {})
     format_str = instr_format.get("format", "")
     variables = instr_format.get("variables", [])
-
+    # Check if LABEL is in a variable and find its position
     if "LABEL" in variables:
         label_position = format_str.split().index("{" + "LABEL" + "}")
         if label_position < len(instr_parts):

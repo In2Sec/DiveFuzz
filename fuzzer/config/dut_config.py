@@ -45,13 +45,16 @@ class DiveFuzzConfig:
     mode: str
     seeds_output: str
 
-    
     template_type: str
     mutate_input: Optional[str] = None
     enable_extension: bool = True
     exclude_extension: Optional[List[str]] = None
-    
+    # Specify which extension set to use: 'nutshell', 'general', 'cva6', etc.
+    allowed_ext_name: str = 'base'
+    # Architecture for bug filtering: 'xs' (XiangShan), 'nts' (NutShell), 'rkt' (Rocket), 'kmh' (Kunminghu)
+    architecture: str = 'xs'
 
+    # generate mode fields
     seeds_num: int = 10
     ins_num: int = 200
     is_cva6: bool = False
