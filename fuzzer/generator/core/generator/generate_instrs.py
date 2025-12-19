@@ -484,7 +484,7 @@ def generate_instructions(instr_number: int,
             spike_session.cleanup()
 
         # TODO: Count how many identical cases have been eliminated
-        #print("resolve_duplicates:",resolve_duplicates,"\nresolve_duplicates_fail:",resolve_duplicates_fail)
+        # print("resolve_duplicates:",resolve_duplicates,"\nresolve_duplicates_fail:",resolve_duplicates_fail)
         return resolve_duplicates, resolve_duplicates_fail
 
     finally:
