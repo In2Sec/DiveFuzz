@@ -11,7 +11,7 @@
 # 
 # See the Mulan PSL v2 for more details.
 
-from .instr_formats import INSTRUCTION_FORMATS
+from .formats import INSTRUCTION_FORMATS
 from math import exp, log
 
 def find_instruction_extension(instruction):

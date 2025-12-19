@@ -11,16 +11,16 @@
 # 
 # See the Mulan PSL v2 for more details.
 
-from .instr_sets import *
-from .instr_sort import *
-from .instr_var import *
-from .instr_formats import *
-from .instr_config import *
+from .sets import *
+from .sorting import *
+from .variables import *
+from .formats import *
+from .config import *
 
-from .instr_generator import (
+from .generator import (
     get_instruction_type,
     get_instruction_format,
     generate_new_instr,
     gen_imm,
-    # generate_random_v_instruction,
+    generate_random_vsetvli_instruction,
 )

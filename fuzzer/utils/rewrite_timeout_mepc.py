@@ -44,9 +44,10 @@ def modify_assembly_code(file_path, new_file_path):
     line_index = 0
 
     for line in lines:
+        # Check whether to enter the mepc_setup segment
         if line.strip() == 'mepc_setup:':
             in_mepc_setup = True
- 
+        # Detect whether a new segment tag is encountered
         elif line.strip().endswith(':') and in_mepc_setup:
             in_mepc_setup = False
             modified_lines.append(line)

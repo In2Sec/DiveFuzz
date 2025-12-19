@@ -10,3 +10,21 @@
 # MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
 #
 # See the Mulan PSL v2 for more details.
+
+"""
+NutShell Known Bug Filters
+
+This module defines known bugs found in NutShell processor through DiveFuzz testing.
+These filters can be enabled to avoid generating test cases that trigger known bugs.
+
+Reference: Bug analysis from 2025-12-14 testing
+"""
+
+from . import add_bug, Registry
+
+
+def register(reg: Registry) -> None:
+    """
+    Register NutShell known bugs to the filter registry.
+    """
+    pass

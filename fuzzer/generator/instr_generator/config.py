@@ -17,8 +17,6 @@ special_instr = [
                 # 'c.beqz', 'c.bnez', 'c.jal',
                 # 'jalr', 'c.jr', 'c.jalr',
                 # Compressed load/store instructions
-                # If these instructions trigger an exception, the return address may not be restored accurately.
-                # TODO MystFuzz can sovle this issue.
                 'c.sw', 'c.sd','c.fsw', 'c.fsd', \
                 'c.lwsp', 'c.swsp', 'c.lw', 'c.sw', 'c.ldsp', 'c.sdsp', 'c.ld', \
                 'c.sd', 'c.flw', 'c.flwsp', 'c.fldsp', 'c.fld', \

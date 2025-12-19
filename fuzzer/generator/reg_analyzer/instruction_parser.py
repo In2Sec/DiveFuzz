@@ -1,22 +1,37 @@
 # Copyright (c) 2024-2025 Institute of Information Engineering, Chinese Academy of Sciences
-# 
+#
 # DiveFuzz is licensed under Mulan PSL v2.
 # You can use this software according to the terms and conditions of the Mulan PSL v2.
 # You may obtain a copy of Mulan PSL v2 at:
 #          http://license.coscl.org.cn/MulanPSL2
-# 
+#
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
 # EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
 # MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
-# 
+#
 # See the Mulan PSL v2 for more details.
 
-from typing import Dict, List, Optional, Tuple
+"""
+Simplified RISC-V Instruction Parser
+
+Parses RISC-V assembly instructions and extracts:
+- Opcode
+- Source register indices (for XOR computation before execution)
+- Destination register indices (for bug filtering after execution)
+- Immediate values
+
+Design Philosophy:
+- Direct parsing: One function returns all needed information
+- No intermediate data structures
+- Minimal abstraction layers
+"""
+
+from typing import Optional, Tuple, List
 from enum import IntEnum
-from dataclasses import dataclass
+
 
 class InstructionType(IntEnum):
-    """RISC-V instruction type enumeration"""
+    """RISC-V instruction type enumeration for operand extraction"""
     ZERO_RS = 0          # Instructions with no source registers
     THREE_FRS = 1        # Instructions with three floating-point source registers
     DOUBLE_FRS = 2       # Instructions with two floating-point source registers
@@ -27,73 +42,68 @@ class InstructionType(IntEnum):
     SINGLE_CSR_RS = 7    # Instructions with one CSR + source register
     SINGLE_CSR_IMM = 8   # Instructions with one CSR + immediate
     SINGLE_IMM = 9       # Instructions with one immediate
-    LOAD = 10            # Load instructions: rd, offset(rs1) - read base register
-    STORE = 11           # Store instructions: rs2, offset(rs1) - read base + data registers
-    LOAD_FP = 12         # FP load instructions: frd, offset(rs1) - read base register
-    STORE_FP = 13        # FP store instructions: frs2, offset(rs1) - read base + data registers
-    
-@dataclass
-class InstructionInfo:
-    """Instruction information data class"""
-    op_name: str
-    oprd_names: List[str]
-    type: InstructionType
-    imm: Optional[int] = None
-    
+    LOAD = 10            # Load instructions: rd, offset(rs1)
+    STORE = 11           # Store instructions: rs2, offset(rs1)
+    LOAD_FP = 12         # FP load instructions: frd, offset(rs1)
+    STORE_FP = 13        # FP store instructions: frs2, offset(rs1)
+    ATOMIC_LR = 14       # Load-Reserved: lr.w/lr.d rd, (rs1)
+    ATOMIC_SC = 15       # Store-Conditional: sc.w/sc.d rd, rs2, (rs1)
+    ATOMIC_AMO = 16      # Atomic Memory Operations: amo*.w/d rd, rs2, (rs1)
+
+
 class InstructionParser:
-    """RISC-V instruction parser"""
-    
-    # Define various types of instructions
-    # TODO Consider rounding mode later
+    """Simplified RISC-V instruction parser"""
+
+    # Instruction groups classified by type
     _INSTRUCTION_GROUPS = {
         InstructionType.ZERO_RS: [
             "frrm", "frflags"
         ],
-        
+
         InstructionType.THREE_FRS: [
             "fmadd.s", "fmsub.s", "fnmadd.s", "fnmsub.s", "fmadd.d", "fmsub.d", "fnmadd.d", "fnmsub.d"
         ],
-        
+
         InstructionType.DOUBLE_FRS: [
-            "fadd.s", "fsub.s", "fmul.s", "fdiv.s", "fsgnj.s", "fsgnjn.s", "fsgnjx.s", "fmin.s", "fmax.s", "feq.s",\
-            "flt.s", "fle.s", "fadd.d", "fsub.d", "fmul.d", "fdiv.d", "fsgnj.d", "fsgnjn.d", "fsgnjx.d", "fmin.d",\
+            "fadd.s", "fsub.s", "fmul.s", "fdiv.s", "fsgnj.s", "fsgnjn.s", "fsgnjx.s", "fmin.s", "fmax.s", "feq.s",
+            "flt.s", "fle.s", "fadd.d", "fsub.d", "fmul.d", "fdiv.d", "fsgnj.d", "fsgnjn.d", "fsgnjx.d", "fmin.d",
             "fmax.d", "feq.d", "flt.d", "fle.d"
         ],
-        
+
         InstructionType.SINGLE_FRS: [
-            "fsqrt.s", "fcvt.w.s", "fcvt.wu.s", "fmv.x.w", "fclass.s", "fsqrt.d", "fcvt.w.d", "fcvt.wu.d", "fclass.d",\
-            "fcvt.d.w", "fcvt.d.wu", "fcvt.s.d", "fcvt.d.s", "fcvt.l.s", "fcvt.lu.s", "fcvt.s.l", "fcvt.s.lu",\
+            "fsqrt.s", "fcvt.w.s", "fcvt.wu.s", "fmv.x.w", "fclass.s", "fsqrt.d", "fcvt.w.d", "fcvt.wu.d", "fclass.d",
+            "fcvt.d.w", "fcvt.d.wu", "fcvt.s.d", "fcvt.d.s", "fcvt.l.s", "fcvt.lu.s", "fcvt.s.l", "fcvt.s.lu",
             "fcvt.l.d", "fcvt.lu.d", "fmv.x.d", "fcvt.d.l", "fcvt.d.lu", "fmv.d.x"
         ],
-        
+
         InstructionType.DOUBLE_RS: [
-            "add", "sub", "sll", "slt", "sltu", "xor", "srl", "sra", "or", "and", "addw", "subw", "sllw", "srlw", "sraw",\
-            "c.add", "c.and", "c.or", "c.xor", "c.sub", "c.addw", "c.subw", "mul", "mulhsu", "mulhu", "div", "divu",\
-            "rem", "remu", "mulh", "mulw", "divw", "divuw", "remw", "remuw", "ror", "rol", "andn", "orn", "xnor", "pack",\
-            "packh", "rorw", "rolw", "packw", "clmul", "clmulh", "xperm8", "xperm4", "aes64es", "aes64es", "aes64esm",\
-            "aes64ks2", "aes64ds", "aes64dsm","bclr", "bext", "binv", "bset", "slo","sro", "grev", "gorc", "shfl","unshfl",\
+            "add", "sub", "sll", "slt", "sltu", "xor", "srl", "sra", "or", "and", "addw", "subw", "sllw", "srlw", "sraw",
+            "c.add", "c.and", "c.or", "c.xor", "c.sub", "c.addw", "c.subw", "mul", "mulhsu", "mulhu", "div", "divu",
+            "rem", "remu", "mulh", "mulw", "divw", "divuw", "remw", "remuw", "ror", "rol", "andn", "orn", "xnor", "pack",
+            "packh", "rorw", "rolw", "packw", "clmul", "clmulh", "xperm8", "xperm4", "aes64es", "aes64esm",
+            "aes64ks2", "aes64ds", "aes64dsm", "bclr", "bext", "binv", "bset", "slo", "sro", "grev", "gorc", "shfl", "unshfl",
             "sh1add", "sh2add", "sh3add", "min", "max", "maxu", "minu", "bcompress", "bdecompress", "bfp", "clmulr"
         ],
-        
+
         InstructionType.SINGLE_RS_IMM: [
-            "addi", "slti", "sltiu", "xori", "ori", "andi", "slli", "srli", "srai", "slliw", "srliw", "sraiw",\
+            "addi", "slti", "sltiu", "xori", "ori", "andi", "slli", "srli", "srai", "slliw", "srliw", "sraiw",
             "c.addi", "c.andi", "c.addiw", "c.slli", "c.srli", "c.srai", "rori", "roriw", "aes64ks1i"
         ],
-        
+
         InstructionType.SINGLE_RS: [
-            "fsrm","fsflags", "fcvt.s.w", "fcvt.s.wu", "fmv.w.x", "c.mv",  "aes64im", "sha512sig0", "sha512sig1",\
-            "sha512sum0", "sha512sum1", "sha256sig0", "sha256sig1", "sha256sum0", "sha256sum1", "sext.b", "sext.h",\
+            "fsrm", "fsflags", "fcvt.s.w", "fcvt.s.wu", "fmv.w.x", "c.mv", "aes64im", "sha512sig0", "sha512sig1",
+            "sha512sum0", "sha512sum1", "sha256sig0", "sha256sig1", "sha256sum0", "sha256sum1", "sext.b", "sext.h",
             "ctz", "crc32.b", "crc32.h", "crc32.w", "crc32c.b", "crc32c.w", "cpop"
         ],
-        
+
         InstructionType.SINGLE_CSR_RS: [
             "csrrw", "csrrs", "csrrc"
         ],
-        
+
         InstructionType.SINGLE_CSR_IMM: [
             "csrrwi", "csrrsi", "csrrci"
         ],
-        
+
         InstructionType.SINGLE_IMM: [
             "lui", "auipc", "li", "c.li", "c.lui", "c.addi16sp", "c.addi4spn"
         ],
@@ -112,97 +122,216 @@ class InstructionParser:
 
         InstructionType.STORE_FP: [
             "fsw", "fsd"
+        ],
+
+        InstructionType.ATOMIC_LR: [
+            "lr.w", "lr.d"
+        ],
+
+        InstructionType.ATOMIC_SC: [
+            "sc.w", "sc.d"
+        ],
+
+        InstructionType.ATOMIC_AMO: [
+            "amoswap.w", "amoswap.d", "amoadd.w", "amoadd.d",
+            "amoxor.w", "amoxor.d", "amoand.w", "amoand.d",
+            "amoor.w", "amoor.d", "amomin.w", "amomin.d",
+            "amomax.w", "amomax.d", "amominu.w", "amominu.d",
+            "amomaxu.w", "amomaxu.d"
         ]
     }
-    
-    _OPCODE_TO_TYPE = {op: instr_type for instr_type, ops in _INSTRUCTION_GROUPS.items() for op in ops}
-    
-    @staticmethod
-    def _get_instruction_type(opcode: str) -> Optional[InstructionType]:
-        """Get instruction type"""
-        return InstructionParser._OPCODE_TO_TYPE.get(opcode)
-    
-    @staticmethod
-    def parse_instruction(instruction_str: str) -> Tuple[str, Optional[InstructionInfo]]:
-        """Parse instruction string"""
-        # Handle possible labels, Remove segment identifiers
-        if ":" in instruction_str:
-            _, instruction_str = instruction_str.split(':', 1)
-        
-        instruction_str = instruction_str.strip()
-        # Remove leading and trailing white space characters
-        parts = instruction_str.split()
-        if not parts:
-            return instruction_str, None
-            
-        opcode = parts[0]
-        operands = [op.rstrip(',') for op in parts[1:]]
-        
-        instr_type = InstructionParser._get_instruction_type(opcode)
-        if instr_type is None:
-            return instruction_str, None
-            
-        if instr_type in [InstructionType.SINGLE_IMM, InstructionType.SINGLE_RS_IMM, InstructionType.SINGLE_CSR_IMM]:
-            imm = int(operands[-1], 0)
-            operands = operands[:-1]
-        else:
-            imm = None  
-            
-        return instruction_str, InstructionInfo(op_name=opcode, oprd_names=operands, type=instr_type, imm=imm)
 
-    # Helper function to extract base register from "offset(base)" format
+    # Build opcode to type mapping
+    _OPCODE_TO_TYPE = {op: instr_type for instr_type, ops in _INSTRUCTION_GROUPS.items() for op in ops}
+
+    # Register name to index mapping
+    _REG_NAME_TO_INDEX = {
+        'zero': 0, 'ra': 1, 'sp': 2, 'gp': 3, 'tp': 4,
+        't0': 5, 't1': 6, 't2': 7,
+        's0': 8, 'fp': 8, 's1': 9,
+        'a0': 10, 'a1': 11, 'a2': 12, 'a3': 13, 'a4': 14, 'a5': 15, 'a6': 16, 'a7': 17,
+        's2': 18, 's3': 19, 's4': 20, 's5': 21, 's6': 22, 's7': 23, 's8': 24, 's9': 25,
+        's10': 26, 's11': 27,
+        't3': 28, 't4': 29, 't5': 30, 't6': 31,
+    }
+
+    # Add x0-x31 and f0-f31 mappings
+    for i in range(32):
+        _REG_NAME_TO_INDEX[f'x{i}'] = i
+        _REG_NAME_TO_INDEX[f'f{i}'] = i
+
     @staticmethod
     def _extract_base_register(addr_str: str) -> str:
-        """Extract base register from address format like '12(t6)' -> 't6'"""
+        """Extract base register from address format like '12(t6)' -> 't6' or '(t6)' -> 't6'"""
         if '(' in addr_str and ')' in addr_str:
             start = addr_str.index('(') + 1
             end = addr_str.index(')')
             return addr_str[start:end]
-        return addr_str  # Fallback if no parentheses
-
-    # Source register extractors - return list of register names (excluding destination register)
-    _EXTRACTORS = {
-        InstructionType.ZERO_RS: lambda a: [a[-1]],                   # rd only, for reading result
-        InstructionType.THREE_FRS: lambda a: [a[-3], a[-2], a[-1]],   # frd, frs1, frs2, frs3 -> get last 3
-        InstructionType.DOUBLE_FRS: lambda a: [a[-2], a[-1]],         # frd, frs1, frs2 -> get last 2
-        InstructionType.SINGLE_FRS: lambda a: [a[-1]],                # frd, frs1 -> get last 1
-        InstructionType.DOUBLE_RS: lambda a: [a[-2], a[-1]],          # rd, rs1, rs2 -> get last 2
-        InstructionType.SINGLE_RS_IMM: lambda a: [a[-1]],             # rd, rs1, imm -> get last 1 (imm already removed)
-        InstructionType.SINGLE_RS: lambda a: [a[-1]],                 # rd, rs1 -> get last 1
-        InstructionType.SINGLE_CSR_RS: lambda a: [a[-1]],             # rd, csr, rs1 -> get last 1 (only rs1 value matters)
-        InstructionType.SINGLE_CSR_IMM: lambda a: [],                 # rd, csr, imm -> no register to read
-        InstructionType.SINGLE_IMM: lambda a: [],                     # rd, imm -> no register to read
-        # Load: rd, offset(rs1) -> extract base register rs1
-        InstructionType.LOAD: lambda a: [InstructionParser._extract_base_register(a[-1])],
-        # Store: rs2, offset(rs1) -> extract both rs2 (data) and rs1 (base)
-        InstructionType.STORE: lambda a: [a[0], InstructionParser._extract_base_register(a[-1])],
-        # FP Load: frd, offset(rs1) -> extract base register rs1
-        InstructionType.LOAD_FP: lambda a: [InstructionParser._extract_base_register(a[-1])],
-        # FP Store: frs2, offset(rs1) -> extract both frs2 (data) and rs1 (base)
-        InstructionType.STORE_FP: lambda a: [a[0], InstructionParser._extract_base_register(a[-1])],
-    }
+        return addr_str
 
     @staticmethod
-    def get_source_registers(instructionInfo: InstructionInfo) -> Optional[List[str]]:
-        """Extract source register names from instruction.
+    def reg_name_to_index(reg_name: str) -> Optional[int]:
+        """Convert register name to index (0-31)"""
+        return InstructionParser._REG_NAME_TO_INDEX.get(reg_name.lower())
+
+    @staticmethod
+    def parse_instruction_full(instruction_str: str) -> Tuple[str, List[int], List[int], Optional[int]]:
+        """
+        Parse instruction and directly return all needed information
+
+        This is the MAIN entry point - one function does everything:
+        1. Parse opcode
+        2. Classify instruction type
+        3. Extract and convert register names to indices
+        4. Separate source vs destination registers
+        5. Extract immediate value
+
+        Args:
+            instruction_str: Assembly instruction like "sc.w s9, a7, (t6)" or "add t0, t1, t2"
 
         Returns:
-            List of source register names, e.g., ['s4', 's5'] for 'add t0, s4, s5'
-            Empty list if no source registers to read
-            None if instruction type not recognized
-        """
-        extractor = InstructionParser._EXTRACTORS.get(instructionInfo.type)
-        if extractor is None:
-            print("No matched instruction type.")
-            return None
+            Tuple of (opcode, source_reg_indices, dest_reg_indices, immediate)
+            immediate is None for instructions without immediate operand
 
-        return extractor(instructionInfo.oprd_names)
+        Examples:
+            "add t0, t1, t2"      → ("add", [6, 7], [5], None)
+            "sc.w s9, a7, (t6)"   → ("sc.w", [17, 31], [25], None)
+            "lr.w s9, (t6)"       → ("lr.w", [31], [25], None)
+            "addi t0, t1, 100"    → ("addi", [6], [5], 100)
+            "addi t0, t1, 0"      → ("addi", [6], [5], 0)
+            "sw t0, 12(t1)"       → ("sw", [5, 6], [], None)
+            "lui t0, 0x1000"      → ("lui", [], [5], 4096)
+
+        Note:
+            For unknown instructions, returns ("unknown", [], [], None)
+        """
+        # Handle labels
+        if ":" in instruction_str:
+            _, instruction_str = instruction_str.split(':', 1)
+
+        instruction_str = instruction_str.strip()
+        parts = instruction_str.split()
+
+        if not parts:
+            return "", [], [], None
+
+        opcode = parts[0]
+        operands = [op.rstrip(',') for op in parts[1:]]
+
+        # Get instruction type
+        instr_type = InstructionParser._OPCODE_TO_TYPE.get(opcode)
+        if instr_type is None:
+            # Unknown instruction, return empty
+            return opcode, [], [], None
+
+        # Extract immediate if present (for IMM type instructions)
+        immediate = None
+        if instr_type in [InstructionType.SINGLE_IMM, InstructionType.SINGLE_RS_IMM, InstructionType.SINGLE_CSR_IMM]:
+            if operands:
+                try:
+                    immediate = int(operands[-1], 0)
+                    operands = operands[:-1]  # Remove immediate from operands list
+                except (ValueError, IndexError):
+                    pass
+
+        # Extract source and dest register indices based on instruction type
+        source_indices, dest_indices = InstructionParser._extract_registers(instr_type, operands)
+
+        return opcode, source_indices, dest_indices, immediate
 
     @staticmethod
-    def is_float_instruction(instructionInfo: InstructionInfo) -> bool:
-        """Check if instruction uses floating-point registers"""
-        return instructionInfo.type in [
-            InstructionType.THREE_FRS,
-            InstructionType.DOUBLE_FRS,
-            InstructionType.SINGLE_FRS
-        ]
+    def _extract_registers(instr_type: InstructionType, operands: List[str]) -> Tuple[List[int], List[int]]:
+        """
+        Extract source and destination register indices based on instruction type
+
+        Args:
+            instr_type: Instruction type enum
+            operands: List of operand strings (with immediate already removed for IMM types)
+
+        Returns:
+            (source_reg_indices, dest_reg_indices)
+        """
+        reg_to_idx = InstructionParser.reg_name_to_index
+
+        # Helper to convert register name to index safely
+        def to_idx(reg_name: str) -> int:
+            idx = reg_to_idx(reg_name)
+            return idx if idx is not None else 0
+
+        if not operands:
+            return [], []
+
+        # Pattern matching for each instruction type
+        # Format: (source_indices, dest_indices)
+
+        if instr_type == InstructionType.ZERO_RS:
+            # rd only (no source registers)
+            return [], [to_idx(operands[0])] if operands else []
+
+        elif instr_type in [InstructionType.THREE_FRS]:
+            # frd, frs1, frs2, frs3 → sources=[frs1,frs2,frs3], dest=[frd]
+            if len(operands) >= 4:
+                return [to_idx(operands[1]), to_idx(operands[2]), to_idx(operands[3])], [to_idx(operands[0])]
+            return [], []
+
+        elif instr_type in [InstructionType.DOUBLE_FRS, InstructionType.DOUBLE_RS]:
+            # rd, rs1, rs2 → sources=[rs1,rs2], dest=[rd]
+            if len(operands) >= 3:
+                return [to_idx(operands[1]), to_idx(operands[2])], [to_idx(operands[0])]
+            return [], []
+
+        elif instr_type in [InstructionType.SINGLE_FRS, InstructionType.SINGLE_RS, InstructionType.SINGLE_RS_IMM]:
+            # rd, rs1, [imm] → sources=[rs1], dest=[rd]
+            if len(operands) >= 2:
+                return [to_idx(operands[1])], [to_idx(operands[0])]
+            return [], []
+
+        elif instr_type == InstructionType.SINGLE_CSR_RS:
+            # rd, csr, rs1 → sources=[rs1], dest=[rd]
+            # Note: CSR address is not included in source_regs (only used for encoding)
+            if len(operands) >= 3:
+                return [to_idx(operands[2])], [to_idx(operands[0])]
+            return [], []
+
+        elif instr_type == InstructionType.SINGLE_CSR_IMM:
+            # rd, csr, imm → sources=[], dest=[rd]
+            if len(operands) >= 2:
+                return [], [to_idx(operands[0])]
+            return [], []
+
+        elif instr_type == InstructionType.SINGLE_IMM:
+            # rd, imm → sources=[], dest=[rd]
+            if len(operands) >= 1:
+                return [], [to_idx(operands[0])]
+            return [], []
+
+        elif instr_type in [InstructionType.LOAD, InstructionType.LOAD_FP]:
+            # rd, offset(base) → sources=[base], dest=[rd]
+            if len(operands) >= 2:
+                base_reg = InstructionParser._extract_base_register(operands[1])
+                return [to_idx(base_reg)], [to_idx(operands[0])]
+            return [], []
+
+        elif instr_type in [InstructionType.STORE, InstructionType.STORE_FP]:
+            # rs2, offset(base) → sources=[rs2, base], dest=[]
+            if len(operands) >= 2:
+                base_reg = InstructionParser._extract_base_register(operands[1])
+                return [to_idx(operands[0]), to_idx(base_reg)], []
+            return [], []
+
+        elif instr_type == InstructionType.ATOMIC_LR:
+            # lr.w rd, (rs1) → sources=[rs1], dest=[rd]
+            if len(operands) >= 2:
+                base_reg = InstructionParser._extract_base_register(operands[1])
+                return [to_idx(base_reg)], [to_idx(operands[0])]
+            return [], []
+
+        elif instr_type in [InstructionType.ATOMIC_SC, InstructionType.ATOMIC_AMO]:
+            # sc.w/amo*.w rd, rs2, (rs1) → sources=[rs2, rs1], dest=[rd]
+            if len(operands) >= 3:
+                base_reg = InstructionParser._extract_base_register(operands[2])
+                return [to_idx(operands[1]), to_idx(base_reg)], [to_idx(operands[0])]
+            return [], []
+
+        # Default fallback
+        return [], []

@@ -43,8 +43,8 @@ def add_bug(registry: Registry, instr: str, bug_name: str, *arg_pattern: str) ->
         raise ValueError("instr cannot be empty")
     if not bug_name:
         raise ValueError("bug_name cannot be empty")
-    if not arg_pattern:
-        raise ValueError("must provide at least one parameter pattern")
+    # if not arg_pattern:
+    #     raise ValueError("must provide at least one parameter pattern")
 
     norm = []
     for p in arg_pattern:
@@ -69,7 +69,8 @@ def _match_args(args: List[int], pattern: Tuple[str, ...]) -> bool:
     for i, pat in enumerate(pattern):
         if pat == '*':
             continue
-        if args[i] != int(pat):
+        # Use int(pat, 0) to auto-detect base (supports 0x prefix for hex)
+        if args[i] != int(pat, 0):
             return False
     return True
 
@@ -100,6 +101,12 @@ def _build_xs_bugs() -> Registry:
     filters_xs.register(reg)
     return reg
 
+def _build_nts_bugs() -> Registry:
+    reg = _build_registry()
+    from . import filters_nts
+    filters_nts.register(reg)
+    return reg
+
 def get_known_bugs(architecture: str) -> Registry:
     """
     Return known bug patterns for the corresponding architecture based on the input architecture name
@@ -107,5 +114,7 @@ def get_known_bugs(architecture: str) -> Registry:
     """
     if architecture == 'xs':
         return _build_xs_bugs()
+    elif architecture == 'nts':
+        return _build_nts_bugs()
     else:
         raise ValueError(f"Unknown architecture: {architecture}")

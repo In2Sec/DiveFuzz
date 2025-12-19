@@ -9,11 +9,15 @@
 	path = dut/rocket-chip
 	url = https://github.com/youzi27/rocket-chip.git
 	branch = dev-difftest
+[submodule "fuzzer/generator/reg_analyzer/riscv-opcodes"]
+	path = fuzzer/generator/reg_analyzer/riscv-opcodes
+	url = https://github.com/riscv/riscv-opcodes.git
+	branch = master
 [submodule "ref/riscv-isa-sim-adapter"]
 	path = ref/riscv-isa-sim-adapter
-	url = https://github.com/youzi27/riscv-isa-sim-adapter.git
-	branch = spike-adapter
+	url = https://github.com/In2Sec/riscv-isa-sim-adapter.git
+	branch = master
 [submodule "ref/riscv-isa-sim"]
 	path = ref/riscv-isa-sim
-	url = https://github.com/youzi27/riscv-isa-sim-adapter.git
+	url = https://github.com/riscv-software-src/riscv-isa-sim.git
 	branch = master

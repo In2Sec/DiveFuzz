@@ -71,12 +71,6 @@ def create_parser():
         default=os.cpu_count() or 20,
         help='Number of parallel processes'
     )
-    parser.add_argument(
-        '--jump-prob', type=float,
-        default=0.06,
-        metavar='PROB',
-        help='Probability of generating jump/branch instructions (0.0-1.0, default: 0.06)'
-    )
 
     # -- path configuration --
     parser.add_argument(

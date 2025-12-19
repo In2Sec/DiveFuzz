@@ -46,10 +46,12 @@ def main():
             config.is_rv32,
             config.max_workers,
             config.arch,
-            config.template_type
+            config.template_type,
+            str(config.out_dir),
+            config.architecture
         )
 
-    # Whether to enable out-of-order mutation, considering previously unseen extension instructions
+    # # Whether to enable out-of-order mutation, considering previously unseen extension instructions
     if config.mutation_enable:
         mutate_instructions_parallel(
             config.directory_path,
@@ -65,9 +67,10 @@ def main():
 
 
 def test_main():
-
+    start_time = time.time()
     main()
-
+    end_time = time.time()
+    print("# Execution time: %.2f seconds" % (end_time - start_time))
 
 if __name__ == "__main__":
     test_main()
