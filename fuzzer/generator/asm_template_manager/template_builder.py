@@ -101,7 +101,7 @@ def _xs_init_reg(p: AsmProgram) -> AsmProgram:
     # Small probability group: reserved modes 5~7
     minor_modes = [5, 6, 7]
 
-    # Choose group (e.g., 90% vs 10%)
+    # Choose group (e.g., 95% vs 5%)
     if random.random() < 0.95:
         rm = random.choice(major_modes)
     else:
