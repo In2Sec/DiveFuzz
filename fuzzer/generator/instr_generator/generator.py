@@ -95,11 +95,11 @@ def gen_imm(imm_type, length):
     return imm
 
 # TODO
-def generate_random_vsetvli_instruction():
+def generate_random_v_instruction():
     """
-    Generates a random vsetvli instruction in assembly format.
+    Generates a random v instruction in assembly format.
     Returns:
-        str: A randomly generated vsetvli instruction.
+        str: A randomly generated v instruction.
     """
     
     return None
