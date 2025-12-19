@@ -19,4 +19,4 @@
 	branch = master
 [submodule "ref/riscv-isa-sim"]
 	path = ref/riscv-isa-sim
-	url = https://github.com/riscv-software-src/riscv-isa-sim.git
+	url = https://github.com/youzi27/riscv-isa-sim.git
