@@ -94,4 +94,4 @@ def process_folders(img_folder):
 
     process_assembly_files_to_force_mm(target_folder)
 
-# process_folders('/Mine/lovefuzz/rocket_log/rand_re_img_timeout/time_out')
+
