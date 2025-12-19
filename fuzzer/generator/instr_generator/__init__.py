@@ -22,5 +22,5 @@ from .generator import (
     get_instruction_format,
     generate_new_instr,
     gen_imm,
-    generate_random_vsetvli_instruction,
+    generate_random_v_instruction,
 )
