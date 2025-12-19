@@ -94,45 +94,15 @@ def gen_imm(imm_type, length):
 
     return imm
 
-
+# TODO
 def generate_random_vsetvli_instruction():
     """
     Generates a random vsetvli instruction in assembly format.
     Returns:
         str: A randomly generated vsetvli instruction.
     """
-    # Randomize source register (e.g., x1 to x31)
-    source_registers = ["x" + str(i) for i in range(1, 32)]  # Exclude x0 (zero register)
-    source_register_aliases = [
-        "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", 
-        "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", 
-        "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", 
-        "t3", "t4", "t5", "t6"
-    ]
-    t0 = random.choice(source_register_aliases)
-
-    # Randomize AVL (Application Vector Length)
-    avl = random.randint(1, 1024)  # Assuming maximum AVL of 1024
-
-    # Randomize SEW (Standard Element Width)
-    sew_options = [8, 16, 32, 64]  # Supported SEW values
-    sew = random.choice(sew_options)
-
-    # Randomize LMUL (Vector Register Group Multiplier)
-    lmul_options = ["m1", "m2", "m4", "mf2", "mf4"]  # Supported LMUL values
-    lmul = random.choice(lmul_options)
-
-    # Randomize TA (Tail Agnostic)
-    ta_options = ["ta", "tu"]  # Tail Agnostic or Tail Undisturbed
-    ta = random.choice(ta_options)
-
-    # Randomize MA (Mask Agnostic)
-    ma_options = ["ma", "mu"]  # Mask Agnostic or Mask Undisturbed
-    ma = random.choice(ma_options)
-
-    # Generate vsetvli instruction in assembly format
-    instruction = f"vsetvli zero, {t0}, e{sew}, {lmul}, {ta}, {ma}"
-    return instruction
+    
+    return None
 
 
 def get_instruction_type(instruction):
