@@ -73,7 +73,7 @@ pip install -r requirements.txt
 Then, build the Spike C/C++ and python wrapper
 
 ```shell
-cd ref/riscv-isa-sim-adapter/spike_wrapper
+cd ref/riscv-isa-sim-adapter/spike_engine
 make
 ```
 
