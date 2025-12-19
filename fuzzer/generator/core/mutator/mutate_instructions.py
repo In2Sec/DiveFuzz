@@ -282,7 +282,7 @@ def write_instructions_to_file(new_filename: str, instructions: str, template: T
 def count_instructions(processed_data):
     freq_counter = {}
     # Update the regular expression to match instructions containing numbers and decimal points
-    instruction_pattern = re.compile(r'^\s*[^:\s]*:\s*([\w.]+)|^\s*([\w.]+)', re.MULTILINE) # riscv-dv
+    instruction_pattern = re.compile(r'^\s*[^:\s]*:\s*([\w.]+)|^\s*([\w.]+)', re.MULTILINE) 
     #instruction_pattern = re.compile(r'^\s*_[a-zA-Z0-9]+:\s*([^\s].*?)(?=\s\s)', re.MULTILINE) # difuzz-rtl
     #instruction_pattern = re.compile(r'^\s*([\w.]+)\s*|(^\s*$)', re.MULTILINE) # difuzz-rtl
 
