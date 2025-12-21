@@ -29,13 +29,19 @@ Design Philosophy:
 from typing import Optional, Tuple, List
 from enum import IntEnum
 
+# Floating-point register index offset
+# Register index convention:
+# - 0-31: Integer registers (x0-x31)
+# - 32-63: Floating-point registers (f0-f31, use FPR_OFFSET + reg_num)
+FPR_OFFSET = 32
+
 
 class InstructionType(IntEnum):
     """RISC-V instruction type enumeration for operand extraction"""
     ZERO_RS = 0          # Instructions with no source registers
     THREE_FRS = 1        # Instructions with three floating-point source registers
     DOUBLE_FRS = 2       # Instructions with two floating-point source registers
-    SINGLE_FRS = 3       # Instructions with one floating-point source register
+    SINGLE_FRS = 3       # Instructions with one floating-point source register (frd, frs)
     DOUBLE_RS = 4        # Instructions with two integer source registers
     SINGLE_RS_IMM = 5    # Instructions with one source register + immediate
     SINGLE_RS = 6        # Instructions with one integer source register
@@ -49,6 +55,8 @@ class InstructionType(IntEnum):
     ATOMIC_LR = 14       # Load-Reserved: lr.w/lr.d rd, (rs1)
     ATOMIC_SC = 15       # Store-Conditional: sc.w/sc.d rd, rs2, (rs1)
     ATOMIC_AMO = 16      # Atomic Memory Operations: amo*.w/d rd, rs2, (rs1)
+    FP_TO_INT = 17       # Float to Int conversion: rd (int), frs (float)
+    INT_TO_FP = 18       # Int to Float conversion: frd (float), rs (int)
 
 
 class InstructionParser:
@@ -71,9 +79,24 @@ class InstructionParser:
         ],
 
         InstructionType.SINGLE_FRS: [
-            "fsqrt.s", "fcvt.w.s", "fcvt.wu.s", "fmv.x.w", "fclass.s", "fsqrt.d", "fcvt.w.d", "fcvt.wu.d", "fclass.d",
-            "fcvt.d.w", "fcvt.d.wu", "fcvt.s.d", "fcvt.d.s", "fcvt.l.s", "fcvt.lu.s", "fcvt.s.l", "fcvt.s.lu",
-            "fcvt.l.d", "fcvt.lu.d", "fmv.x.d", "fcvt.d.l", "fcvt.d.lu", "fmv.d.x"
+            # frd, frs -> float to float operations
+            "fsqrt.s", "fsqrt.d", "fcvt.s.d", "fcvt.d.s"
+        ],
+
+        InstructionType.FP_TO_INT: [
+            # rd (int), frs (float) -> float to int conversion
+            "fcvt.w.s", "fcvt.wu.s", "fcvt.l.s", "fcvt.lu.s",
+            "fcvt.w.d", "fcvt.wu.d", "fcvt.l.d", "fcvt.lu.d",
+            "fmv.x.w", "fmv.x.d",
+            # fclass instructions also write to integer register
+            "fclass.s", "fclass.d"
+        ],
+
+        InstructionType.INT_TO_FP: [
+            # frd (float), rs (int) -> int to float conversion
+            "fcvt.s.w", "fcvt.s.wu", "fcvt.s.l", "fcvt.s.lu",
+            "fcvt.d.w", "fcvt.d.wu", "fcvt.d.l", "fcvt.d.lu",
+            "fmv.w.x", "fmv.d.x"
         ],
 
         InstructionType.DOUBLE_RS: [
@@ -91,7 +114,7 @@ class InstructionParser:
         ],
 
         InstructionType.SINGLE_RS: [
-            "fsrm", "fsflags", "fcvt.s.w", "fcvt.s.wu", "fmv.w.x", "c.mv", "aes64im", "sha512sig0", "sha512sig1",
+            "fsrm", "fsflags", "c.mv", "aes64im", "sha512sig0", "sha512sig1",
             "sha512sum0", "sha512sum1", "sha256sig0", "sha256sig1", "sha256sum0", "sha256sum1", "sext.b", "sext.h",
             "ctz", "crc32.b", "crc32.h", "crc32.w", "crc32c.b", "crc32c.w", "cpop"
         ],
@@ -144,7 +167,7 @@ class InstructionParser:
     # Build opcode to type mapping
     _OPCODE_TO_TYPE = {op: instr_type for instr_type, ops in _INSTRUCTION_GROUPS.items() for op in ops}
 
-    # Register name to index mapping
+    # Register name to index mapping (integer registers)
     _REG_NAME_TO_INDEX = {
         'zero': 0, 'ra': 1, 'sp': 2, 'gp': 3, 'tp': 4,
         't0': 5, 't1': 6, 't2': 7,
@@ -159,6 +182,19 @@ class InstructionParser:
     for i in range(32):
         _REG_NAME_TO_INDEX[f'x{i}'] = i
         _REG_NAME_TO_INDEX[f'f{i}'] = i
+
+    # Add floating-point register ABI names (ft0-ft11, fs0-fs11, fa0-fa7)
+    _FPR_ABI_TO_INDEX = {
+        'ft0': 0, 'ft1': 1, 'ft2': 2, 'ft3': 3, 'ft4': 4, 'ft5': 5, 'ft6': 6, 'ft7': 7,
+        'fs0': 8, 'fs1': 9,
+        'fa0': 10, 'fa1': 11,
+        'fa2': 12, 'fa3': 13, 'fa4': 14, 'fa5': 15, 'fa6': 16, 'fa7': 17,
+        'fs2': 18, 'fs3': 19, 'fs4': 20, 'fs5': 21, 'fs6': 22, 'fs7': 23,
+        'fs8': 24, 'fs9': 25, 'fs10': 26, 'fs11': 27,
+        'ft8': 28, 'ft9': 29, 'ft10': 30, 'ft11': 31,
+    }
+    # Add FPR ABI names to the main mapping (they use same 0-31 indices as f0-f31)
+    _REG_NAME_TO_INDEX.update(_FPR_ABI_TO_INDEX)
 
     @staticmethod
     def _extract_base_register(addr_str: str) -> str:
@@ -250,13 +286,21 @@ class InstructionParser:
 
         Returns:
             (source_reg_indices, dest_reg_indices)
+            Note: Floating-point registers use indices 32-63 (FPR_OFFSET + reg_num)
         """
         reg_to_idx = InstructionParser.reg_name_to_index
 
         # Helper to convert register name to index safely
+        # Returns FPR_OFFSET + reg_num for floating-point registers
         def to_idx(reg_name: str) -> int:
             idx = reg_to_idx(reg_name)
-            return idx if idx is not None else 0
+            if idx is None:
+                return 0
+            # Check if this is a floating-point register (starts with 'f')
+            reg_lower = reg_name.strip().lower()
+            if reg_lower.startswith('f'):
+                return FPR_OFFSET + idx
+            return idx
 
         if not operands:
             return [], []
@@ -284,6 +328,26 @@ class InstructionParser:
             # rd, rs1, [imm] → sources=[rs1], dest=[rd]
             if len(operands) >= 2:
                 return [to_idx(operands[1])], [to_idx(operands[0])]
+            return [], []
+
+        elif instr_type == InstructionType.FP_TO_INT:
+            # rd (int), frs (float) → sources=[frs with FPR_OFFSET], dest=[rd without FPR_OFFSET]
+            # e.g., fcvt.l.s t0, fs0 → sources=[40], dest=[5]
+            if len(operands) >= 2:
+                frs_idx = reg_to_idx(operands[1])
+                rd_idx = reg_to_idx(operands[0])
+                if frs_idx is not None and rd_idx is not None:
+                    return [FPR_OFFSET + frs_idx], [rd_idx]
+            return [], []
+
+        elif instr_type == InstructionType.INT_TO_FP:
+            # frd (float), rs (int) → sources=[rs without FPR_OFFSET], dest=[frd with FPR_OFFSET]
+            # e.g., fcvt.s.l fs0, t0 → sources=[5], dest=[40]
+            if len(operands) >= 2:
+                rs_idx = reg_to_idx(operands[1])
+                frd_idx = reg_to_idx(operands[0])
+                if rs_idx is not None and frd_idx is not None:
+                    return [rs_idx], [FPR_OFFSET + frd_idx]
             return [], []
 
         elif instr_type == InstructionType.SINGLE_CSR_RS:

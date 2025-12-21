@@ -16,8 +16,7 @@ import re
 import random
 import numpy as np
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Tuple, List
+from typing import List
 from ...asm_template_manager import create_template_instance, TemplateInstance, temp_file_manager
 from ...asm_template_manager.riscv_asm_syntex import ArchConfig
 from ...asm_template_manager.ext_list import allowed_ext
@@ -26,7 +25,7 @@ from ...instr_generator import (
     special_instr,
     rv32_not_support_instr,
     rv32_not_support_csrs,
-    generate_random_vsetvli_instruction,
+    # generate_random_vsetvli_instruction,
     get_instruction_format,
     generate_new_instr,
     reg_range
@@ -34,12 +33,143 @@ from ...instr_generator import (
 from ...reg_analyzer.nop_template_gen import generate_nop_elf
 from ...reg_analyzer.spike_session import SpikeSession, SPIKE_ENGINE_AVAILABLE
 from ...reg_analyzer.instruction_validator import InstructionValidator
+from ...reg_analyzer.instruction_post_processor import InstructionPostProcessor
 from ...reg_analyzer.hybrid_encoder import HybridEncoder
+from ...reg_analyzer.jump_sequence_compiler import JumpSequenceCompiler
 from ...utils import list2str
 from .register_history import RegisterHistory
 from ...instr_generator.label_manager import LabelManager
 from ...config.config_manager import MAX_MUTATE_TIME
-from ...bug_filter import bug_filter
+
+
+def generate_forward_jump_instrs(
+    jump_instr: str,
+    target_distance: int,
+    extension: str,
+    rd_history,
+    rs_history,
+    frd_history,
+    frs_history,
+    is_rv32: bool,
+    instrs_filter: list,
+    probabilities: list,
+    allowed_extensions: list
+) -> List[str]:
+    """
+    Generate middle instructions for forward jump sequence.
+
+    Returns list of assembly instruction strings (without jump/branch).
+    """
+    middle_instrs = []
+
+    for _ in range(target_distance):
+        # Select extension
+        ext = np.random.choice(allowed_extensions, p=probabilities)
+
+        # Get instruction list for this extension
+        if ext not in INSTRUCTION_FORMATS:
+            continue
+
+        instrs_complete = INSTRUCTION_FORMATS[ext]
+        instrs = list(instrs_complete.keys())
+
+        # Filter out jumps, branches, and compressed instructions
+        filtered = [instr for instr in instrs
+                   if 'LABEL' not in get_instruction_format(instr).get('variables', [])
+                   and 'JUMP' not in get_instruction_format(instr).get('category', [])
+                   and 'BRANCH' not in get_instruction_format(instr).get('category', [])
+                   and not instr.startswith('c.')
+                   and instr not in special_instr]
+
+        if not filtered:
+            continue
+
+        instr = random.choice(filtered)
+
+        # Filter for RV32
+        if is_rv32:
+            while instr in rv32_not_support_instr and filtered:
+                filtered.remove(instr)
+                if filtered:
+                    instr = random.choice(filtered)
+                else:
+                    break
+
+        if filtered:
+            complete_instr = generate_new_instr(instr, ext, rd_history, rs_history,
+                                               frd_history, frs_history)
+            middle_instrs.append(complete_instr)
+
+    return middle_instrs
+
+
+def generate_loop_body_instrs(
+    target_distance: int,
+    counter_reg: str,
+    rd_history,
+    rs_history,
+    frd_history,
+    frs_history,
+    is_rv32: bool,
+    probabilities: list,
+    allowed_extensions: list
+) -> List[str]:
+    """
+    Generate loop body instructions (excluding counter register modifications).
+
+    Returns list of assembly instruction strings.
+    """
+    loop_body = []
+
+    for _ in range(target_distance):
+        # Select extension
+        ext = np.random.choice(allowed_extensions, p=probabilities)
+
+        if ext not in INSTRUCTION_FORMATS:
+            continue
+
+        instrs_complete = INSTRUCTION_FORMATS[ext]
+        instrs = list(instrs_complete.keys())
+
+        # Filter out jumps, branches, compressed instructions
+        filtered = [instr for instr in instrs
+                   if 'LABEL' not in get_instruction_format(instr).get('variables', [])
+                   and 'JUMP' not in get_instruction_format(instr).get('category', [])
+                   and 'BRANCH' not in get_instruction_format(instr).get('category', [])
+                   and not instr.startswith('c.')
+                   and instr not in special_instr]
+
+        if not filtered:
+            continue
+
+        instr = random.choice(filtered)
+
+        if is_rv32:
+            while instr in rv32_not_support_instr and filtered:
+                filtered.remove(instr)
+                if filtered:
+                    instr = random.choice(filtered)
+                else:
+                    break
+
+        if not filtered:
+            continue
+
+        # Generate instruction and check if it modifies counter register
+        max_attempts = 5
+        for _ in range(max_attempts):
+            complete_instr = generate_new_instr(instr, ext, rd_history, rs_history,
+                                               frd_history, frs_history)
+            # Check if instruction writes to counter register
+            instr_parts = complete_instr.split()
+            if len(instr_parts) >= 2:
+                dest_reg = instr_parts[1].rstrip(',')
+                if dest_reg == counter_reg:
+                    continue  # Retry with different operands
+            loop_body.append(complete_instr)
+            break
+
+    return loop_body
 
 
 def generate_instructions(instr_number: int,
@@ -67,47 +197,76 @@ def generate_instructions(instr_number: int,
         shared_xor_cache: Manager.dict for cross-process XOR sharing
         architecture: Architecture for bug filtering ('xs', 'nts', 'rkt', 'kmh')
     """
-    # CRITICAL: Re-initialize bug_filter in subprocess context
-    # ProcessPoolExecutor creates independent Python interpreters for each worker,
-    # so global state (like bug_filter.registry) is not shared from parent process.
-    # We MUST re-initialize bug_filter here to load the correct architecture's bug patterns.
-    bug_filter.set_architecture(architecture)
 
     # Create fresh template instance for this seed with random type and values
     # This ensures each seed gets independent random content (MSTATUS, register init, etc.)
     template = create_template_instance(arch, template_type)
 
     try:
-        # Initialize Spike session for eliminate mode (NEW: checkpoint-based validation)
+        # Initialize Spike session for eliminate mode (checkpoint-based validation)
         spike_session = None
         validator = None
+        post_processor = None
         if eliminate_enable and SPIKE_ENGINE_AVAILABLE:
             try:
                 # Generate NOP ELF template
                 elf_path = f"/dev/shm/template_{seed_times}_{instr_number}.elf"
                 elf_path = generate_nop_elf(template, instr_number, elf_path)
 
+                # Create SpikeSession (decoupled from XOR logic)
                 spike_session = SpikeSession(
                     elf_path,
                     template.isa,
-                    instr_number,
-                    shared_xor_cache
+                    instr_number
                 )
                 if spike_session.initialize():
-                    # Create validator with encoder
+                    # Create post processor for XOR computation and bug filtering
+                    # This handles cross-process XOR sharing and bug pattern matching
+                    post_processor = InstructionPostProcessor(
+                        shared_xor_cache,
+                        architecture
+                    )
+
+                    # Create validator with spike_session and post_processor
                     encoder = HybridEncoder(quiet=True)
-                    validator = InstructionValidator(spike_session, encoder)
+                    validator = InstructionValidator(spike_session, post_processor, encoder)
                     # print(f"[Seed {seed_times}] Using checkpoint-based validation")
+                    # Create jump sequence compiler for handling jump instructions
+                    jump_compiler = JumpSequenceCompiler(encoder.encoder)
+
+                    # Enable debug output if DEBUG_SPIKE_ENGINE environment variable is set
+                    # Values:
+                    #   - "1" or "all": Log all instructions (ACCEPTED and REJECTED)
+                    #   - "accepted": Log only ACCEPTED instructions
+                    import os
+                    debug_mode = os.environ.get('DEBUG_SPIKE_ENGINE', '').lower()
+                    if debug_mode:
+                        debug_file = os.path.join(out_dir, f"spike_engine_debug_{seed_times}.txt")
+                        accepted_only = (debug_mode == 'accepted')
+                        InstructionValidator.enable_debug_output(debug_file, accepted_only=accepted_only)
+                        mode_str = "ACCEPTED only" if accepted_only else "ALL"
+                        print(f"[Seed {seed_times}] Debug output enabled ({mode_str}): {debug_file}")
                 else:
                     print(f"[Seed {seed_times}] Spike initialization failed")
                     spike_session = None
                     validator = None
-                    return
+                    post_processor = None
+                    jump_compiler = None
+                    return 0, 0
             except Exception as e:
                 print(f"[Seed {seed_times}] Failed to initialize Spike session: {e}")
                 spike_session = None
                 validator = None
-                return
+                post_processor = None
+                jump_compiler = None
+                return 0, 0
+        else:
+            # Non-eliminate mode: still create jump_compiler for offset calculation
+            try:
+                from ...reg_analyzer.instruction_encoder import InstructionEncoder
+                jump_compiler = JumpSequenceCompiler(InstructionEncoder())
+            except Exception:
+                jump_compiler = None
 
         # Calculate the total of explicitly assigned probabilities
         total_specified_prob = sum(allowed_ext.special_probabilities.values())
@@ -172,35 +331,9 @@ def generate_instructions(instr_number: int,
                 extension = random.choice(c_extension)
                 c_instr_consecutive_number += 1
 
-            # Increase the jump distance limit; if it's the last instruction, a label should be added forcibly.
-            if i == instr_number - 1 and label_mgr.is_jump_active():
-                jump_type = label_mgr.get_jump_type()
+            # Note: Jump sequences are now generated atomically, so we don't need to
+            # check for incomplete jump sequences at the end of the loop
 
-                if jump_type == 'forward':
-                    # Forward jump: insert label definition at target position
-                    label_name = label_mgr.get_current_label()
-                    entire_instrs.append(f'{label_name}:')
-                elif jump_type == 'backward':
-                    # Backward jump: insert loop control instructions
-                    jump_instr = label_mgr.get_jump_instruction()  # "addi t0, t0, -1\nbnez t0, bwd_0"
-                    counter_reg = label_mgr.get_loop_counter_reg()  # "t0"
-
-                    # Add loop control instructions
-                    if '\n' in jump_instr:
-                        for line in jump_instr.split('\n'):
-                            entire_instrs.append(line)
-                    else:
-                        entire_instrs.append(jump_instr)
-
-                    # Update RegisterHistory for loop counter
-                    # addi t0, t0, -1: reads and writes the counter register
-                    if counter_reg:
-                        rs_history.use_register(counter_reg)  # addi reads counter_reg
-                        rd_history.use_register(counter_reg)  # addi writes counter_reg
-
-                label_mgr.end_jump_sequence()
-                continue
-        
             complete_instr = 'nop'
             if  extension == "ILL":
                 instrs_complete = INSTRUCTION_FORMATS[extension]
@@ -214,18 +347,7 @@ def generate_instructions(instr_number: int,
                     instrs_complete = INSTRUCTION_FORMATS[extension]
                     instrs = list(instrs_complete.keys())
 
-                    # Filter instructions based on current state
-                    # If jump sequence is active: exclude jump/branch to avoid nesting
-                    # Otherwise: allow all instructions (natural probability)
-                    if label_mgr.is_jump_active():
-                        # During active jump sequence: only exclude jump/branch instructions to avoid nesting
-                        instrs_filter =[instr for instr in instrs if 'LABEL' not in get_instruction_format(instr).get('variables', []) \
-                                                                and 'JUMP' not in get_instruction_format(instr).get('category', [])\
-                                                                and 'BRANCH' not in get_instruction_format(instr).get('category', [])\
-                                                                and not instr.startswith('c.')]
-                    else:
-                        # Filter out compressed instructions (starting with 'c.') because main section uses .option norvc
-                        instrs_filter =[instr for instr in instrs if not instr.startswith('c.')]
+                    instrs_filter = [instr for instr in instrs if not instr.startswith('c.')]
                     if instrs_filter:
                         instr = random.choice(instrs_filter)
                     else:
@@ -249,54 +371,108 @@ def generate_instructions(instr_number: int,
                         # The last instruction cannot be a jump instruction because there are no subsequent labels.
                         if i == instr_number - 1:
                             continue
-                        # Check if backward jump is possible
 
-                        # 50% probability to generate backward jump if possible
+                        # 50% probability to generate backward loop if bne instruction
                         if (instr == 'bne') and random.random() < 0.5:
                             # === BACKWARD LOOP WITH FIXED COUNTER (s11) ===
-                            # Use fixed register s11 as loop counter (rarely used, avoids conflicts)
                             counter_reg = 's11'
-
-                            # 1. Generate loop iterations (1-8 times)
                             loop_iterations = random.randint(1, 8)
-
-                            # 2. Generate backward label
                             label = label_mgr.generate_backward_label()
-
-                            # 3. Target distance: number of instructions in loop body (3-8)
-                            # Similar to forward jump
                             target_distance = random.randint(3, 8)
 
-                            # 4. Append initialization instruction and label to end of entire_instrs
-                            # This ensures only newly generated instructions become part of loop body,
-                            # avoiding the issue where existing instructions might modify the counter
-                            entire_instrs.append(f'li {counter_reg}, {loop_iterations}')
+                            # Generate loop body instructions
+                            loop_body = generate_loop_body_instrs(
+                                target_distance, counter_reg,
+                                rd_history, rs_history, frd_history, frs_history,
+                                is_rv32, probabilities, allowed_ext.allowed_ext
+                            )
+
+                            # Construct loop components
+                            init_instr = f'li {counter_reg}, {loop_iterations}'
+                            decr_instr = f'addi {counter_reg}, {counter_reg}, -1'
+                            branch_instr = f'bne {counter_reg}, zero, {{LABEL}}'
+
+                            # If jump_compiler and spike_session are available, compile and execute
+                            if jump_compiler is not None and spike_session is not None:
+                                try:
+                                    loop_seq = jump_compiler.compile_backward_loop(
+                                        init_instr, loop_body, decr_instr, branch_instr, label
+                                    )
+                                    # Get machine codes and sizes for execution
+                                    codes_and_sizes = jump_compiler.get_machine_codes(loop_seq)
+                                    if codes_and_sizes:
+                                        # Extract init, body, decr, branch parts
+                                        init_code, init_size = codes_and_sizes[0]
+                                        body_codes = [c for c, s in codes_and_sizes[1:-2]]
+                                        body_sizes = [s for c, s in codes_and_sizes[1:-2]]
+                                        decr_code, decr_size = codes_and_sizes[-2]
+                                        branch_code, branch_size = codes_and_sizes[-1]
+
+                                        # Execute the loop sequence
+                                        spike_session.execute_loop_sequence(
+                                            init_code, init_size,
+                                            body_codes, body_sizes,
+                                            decr_code, decr_size,
+                                            branch_code, branch_size,
+                                            max_iterations=loop_iterations + 1
+                                        )
+                                except Exception as e:
+                                    # If execution fails, just continue with assembly output
+                                    pass
+
+                            # Append to output with labels (for assembly file readability)
+                            entire_instrs.append(init_instr)
                             entire_instrs.append(f'{label}:')
+                            entire_instrs.extend(loop_body)
+                            entire_instrs.append(decr_instr)
+                            entire_instrs.append(f'bne {counter_reg}, zero, {label}')
 
-                            # 5. Construct loop control instructions (decrement + conditional jump)
-                            # Use bne (branch if not equal) to check counter against zero
-                            loop_control = f'addi {counter_reg}, {counter_reg}, -1\nbne {counter_reg}, zero, {label}'
-
-                            # 6. Update register history (initialization instruction)
+                            # Update register history
                             rd_history.use_register(counter_reg)
 
-                            # 7. Start backward jump sequence with loop counter info
-                            label_mgr.start_jump_sequence('backward', label, target_distance, loop_control,
-                                                         loop_counter_reg=counter_reg)
+                            # Skip i increment for the number of instructions added
+                            i += len(loop_body) + 3  # init + body + decr + branch
                             continue
+
                         else:
                             # === FORWARD DIRECT JUMP ===
-                            # Generate direct jump/branch instruction with {LABEL} placeholder
-                            # generate_new_instr will output instruction with {LABEL} placeholder (e.g., "beq a0, a1, {LABEL}")
                             label = label_mgr.generate_forward_label()
-                            target_distance = random.randint(3, 8)  # Jump over 3-8 instructions
-                            complete_instr = generate_new_instr(instr, extension, rd_history, rs_history, \
-                                                                    frd_history,frs_history)
-                            label_mgr.start_jump_sequence('forward', label, target_distance, complete_instr)
+                            target_distance = random.randint(3, 8)
 
-                            # Replace {LABEL} placeholder with actual label (e.g., "fwd_0")
-                            complete_instr = complete_instr.replace('{LABEL}', label)
-                            entire_instrs.append(complete_instr)
+                            # Generate jump instruction with placeholder
+                            jump_instr = generate_new_instr(instr, extension, rd_history, rs_history,
+                                                           frd_history, frs_history)
+
+                            # Generate middle instructions
+                            middle_instrs = generate_forward_jump_instrs(
+                                jump_instr, target_distance, extension,
+                                rd_history, rs_history, frd_history, frs_history,
+                                is_rv32, instrs_filter, probabilities, allowed_ext.allowed_ext
+                            )
+
+                            # If jump_compiler and spike_session are available, compile and execute
+                            if jump_compiler is not None and spike_session is not None:
+                                try:
+                                    fwd_seq = jump_compiler.compile_forward_jump(
+                                        jump_instr, middle_instrs, label
+                                    )
+                                    # Get machine codes and sizes for execution
+                                    codes_and_sizes = jump_compiler.get_machine_codes(fwd_seq)
+                                    if codes_and_sizes:
+                                        codes = [c for c, s in codes_and_sizes]
+                                        sizes = [s for c, s in codes_and_sizes]
+                                        spike_session.execute_jump_sequence(codes, sizes)
+                                except Exception as e:
+                                    # If execution fails, just continue with assembly output
+                                    pass
+
+                            # Append to output with labels (for assembly file readability)
+                            entire_instrs.append(jump_instr.replace('{LABEL}', label))
+                            entire_instrs.extend(middle_instrs)
+                            entire_instrs.append(f'{label}:')
+
+                            # Skip i increment for the number of instructions added
+                            i += len(middle_instrs) + 1  # jump + middle
                             continue
 
                     elif is_indirect_jump:
@@ -304,9 +480,6 @@ def generate_instructions(instr_number: int,
                         if i == instr_number - 1:
                             continue
                         # === FORWARD INDIRECT JUMP ONLY ===
-                        # Note: Backward indirect jump removed for simplicity
-                        # Loops typically use direct jumps, not indirect jumps
-
                         label = label_mgr.generate_forward_label()
                         target_distance = random.randint(3, 8)
 
@@ -314,65 +487,61 @@ def generate_instructions(instr_number: int,
                         safe_regs = [r for r in reg_range if r not in ['zero', 'sp', 'gp', 'tp']]
                         chosen_reg = random.choice(safe_regs) if safe_regs else random.choice(reg_range)
 
-                        # Construct jalr instruction manually with correct register
+                        # Construct jump instruction
                         if instr == 'jalr':
                             rd = random.choice(reg_range)
-                            complete_instr = f'jalr {rd}, 0({chosen_reg})'
-                            # Update register history
+                            jump_instr_str = f'jalr {rd}, 0({chosen_reg})'
                             rd_history.use_register(rd)
                         elif instr == 'c.jr':
-                            complete_instr = f'c.jr {chosen_reg}'
+                            jump_instr_str = f'c.jr {chosen_reg}'
                         elif instr == 'c.jalr':
-                            complete_instr = f'c.jalr {chosen_reg}'
+                            jump_instr_str = f'c.jalr {chosen_reg}'
 
                         rs_history.use_register(chosen_reg)
-                        label_mgr.start_jump_sequence('forward', label, target_distance, complete_instr)
 
-                        # Generate: la reg, label; jalr/c.jr/c.jalr reg
+                        # Generate middle instructions
+                        middle_instrs = generate_forward_jump_instrs(
+                            jump_instr_str, target_distance, extension,
+                            rd_history, rs_history, frd_history, frs_history,
+                            is_rv32, instrs_filter, probabilities, allowed_ext.allowed_ext
+                        )
+
+                        # If jump_compiler and spike_session are available, compile and execute
+                        if jump_compiler is not None and spike_session is not None:
+                            try:
+                                ind_seq = jump_compiler.compile_indirect_jump(
+                                    f'la {chosen_reg}, {{LABEL}}',
+                                    jump_instr_str,
+                                    middle_instrs,
+                                    label
+                                )
+                                codes_and_sizes = jump_compiler.get_machine_codes(ind_seq)
+                                if codes_and_sizes:
+                                    codes = [c for c, s in codes_and_sizes]
+                                    sizes = [s for c, s in codes_and_sizes]
+                                    spike_session.execute_jump_sequence(codes, sizes)
+                            except Exception as e:
+                                pass
+
+                        # Append to output with labels
                         entire_instrs.append(f'la {chosen_reg}, {label}')
-                        entire_instrs.append(complete_instr)
+                        entire_instrs.append(jump_instr_str)
+                        entire_instrs.extend(middle_instrs)
+                        entire_instrs.append(f'{label}:')
+
+                        # Skip i increment
+                        i += len(middle_instrs) + 2  # la + jump + middle
                         continue
 
-                    elif label_mgr.is_jump_active():
-                        label_mgr.increment_distance()
-                        # Increase the jump distance limit; if it's the last instruction, a label should be added forcibly.
-                        if label_mgr.should_finalize_jump() or i == instr_number - 1:
-                            jump_type = label_mgr.get_jump_type()
-
-                            if jump_type == 'forward':
-                                # Forward jump: insert label definition at target position
-                                label_name = label_mgr.get_current_label()
-                                entire_instrs.append(f'{label_name}:')
-                            elif jump_type == 'backward':
-                                # Backward jump: insert loop control instructions
-                                jump_instr = label_mgr.get_jump_instruction()  # "addi t0, t0, -1\nbnez t0, bwd_0"
-                                counter_reg = label_mgr.get_loop_counter_reg()  # "t0"
-
-                                # Add loop control instructions
-                                if '\n' in jump_instr:
-                                    for line in jump_instr.split('\n'):
-                                        entire_instrs.append(line)
-                                else:
-                                    entire_instrs.append(jump_instr)
-
-                                # Update RegisterHistory for loop counter
-                                # addi t0, t0, -1: reads and writes the counter register
-                                if counter_reg:
-                                    rs_history.use_register(counter_reg)  # addi reads counter_reg
-                                    rd_history.use_register(counter_reg)  # addi writes counter_reg
-
-                            label_mgr.end_jump_sequence()
 
                     # --------- Instruction validation with duplicate elimination -----------
-                    max_w = 2
                     # TODO Currently does not support spike debug for vector instructions (vec)
 
                     if eliminate_enable and extension != 'RV_V':
-                        # NEW: Use checkpoint-based validation if available (O(n) mode)
+                        # Use checkpoint-based validation with decoupled XOR and bug filtering
                         if validator is not None:
-                            is_diff_rs = 0
                             mutate_time = 0
-                            while is_diff_rs == 0 and mutate_time < MAX_MUTATE_TIME:
+                            while mutate_time < MAX_MUTATE_TIME:
                                 # Generate new instruction
                                 if is_rv32:
                                     while True:
@@ -384,43 +553,16 @@ def generate_instructions(instr_number: int,
                                     complete_instr = generate_new_instr(instr, extension, rd_history, rs_history, \
                                                                     frd_history, frs_history)
 
-                                # Check backward loop protection before validation
-                                if label_mgr.is_jump_active() and label_mgr.get_jump_type() == 'backward':
-                                    counter_reg = label_mgr.get_loop_counter_reg()
-                                    instr_parts = complete_instr.split()
-                                    if len(instr_parts) >= 2 and instr_parts[1].rstrip(',') == counter_reg:
-                                        mutate_time += 1
-                                        continue  # Regenerate without validation
-
-                                # Validate with checkpoint-based validator
-                                # NEW: validator returns (xor_value, dest_values, source_values)
-                                xor_value, dest_values, source_values = validator.validate_instruction(complete_instr)
-
-                                if xor_value is not None:
-                                    # Instruction executed successfully with unique XOR
-                                    # Extract opcode for bug filtering and confirmation
-                                    opcode = complete_instr.strip().split()[0] if complete_instr.strip() else "unknown"
-
-                                    # Check for known bugs using actual register values
-                                    # Pattern format: (dest_pattern, src1_pattern, src2_pattern, ...)
-                                    bug_name = bug_filter.filter_known_bug(opcode, dest_values, source_values)
-                                    if bug_name:
-                                        # Instruction triggers known bug, restore checkpoint and retry
-                                        spike_session.restore_checkpoint_and_reset()
-                                        mutate_time += 1
-                                        continue
-
-                                    # Instruction is valid and doesn't trigger bugs, accept it
-                                    spike_session.confirm_instruction(xor_value, complete_instr, opcode=opcode)
-                                    is_diff_rs = 1
+                                # Validate instruction (auto-confirms if valid, auto-rejects if not)
+                                if validator.validate_instruction(complete_instr):
                                     break
-                                else:
-                                    # Duplicate XOR, spike_session already restored checkpoint
-                                    mutate_time += 1
+                                mutate_time += 1
 
                             # Update statistics
                             if mutate_time >= MAX_MUTATE_TIME:
                                 resolve_duplicates_fail += 1
+                                # Skip this instruction since validation failed
+                                continue
                             else:
                                 resolve_duplicates += 1
 
@@ -457,18 +599,6 @@ def generate_instructions(instr_number: int,
                                     while ", ," in complete_instr:
                                         complete_instr = complete_instr.replace(", ,", ",")
 
-                            # Check backward loop protection (same as eliminate mode)
-                            if label_mgr.is_jump_active() and label_mgr.get_jump_type() == 'backward':
-                                counter_reg = label_mgr.get_loop_counter_reg()
-                                instr_parts = complete_instr.split()
-                                if len(instr_parts) >= 2 and instr_parts[1].rstrip(',') == counter_reg:
-                                    retry_count += 1
-                                    continue  # Regenerate to avoid modifying loop counter
-
-                            # NOTE: In non-eliminate mode, bug_filter is not available
-                            # because we don't execute instructions in Spike (no dest_values)
-                            # Bug filtering only works in eliminate mode (-e flag)
-
                             # Instruction is valid, exit retry loop
                             break
                 except IndexError as e:
@@ -482,6 +612,9 @@ def generate_instructions(instr_number: int,
         # Cleanup Spike session
         if spike_session is not None:
             spike_session.cleanup()
+
+        # Disable debug output
+        InstructionValidator.disable_debug_output()
 
         # TODO: Count how many identical cases have been eliminated
         # print("resolve_duplicates:",resolve_duplicates,"\nresolve_duplicates_fail:",resolve_duplicates_fail)
