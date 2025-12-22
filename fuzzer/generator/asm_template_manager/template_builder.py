@@ -33,7 +33,7 @@ def _xs_text_startup(p: AsmProgram) -> AsmProgram:
     [XiangShan ] Build the startup sequence in .text (_start and early jumps):
     - Read mhartid/core ID
     - Jump to h0_start via jalr
-    - Set MISA, kernel stack pointer, trap vector MTVEC, initial MEPC
+    - Set MISA, kernel stack pointer, trap vector MTVEC/STVEC, initial MEPC
     """
     p.globl(LBL_START).section(".text")
 
@@ -46,6 +46,8 @@ def _xs_text_startup(p: AsmProgram) -> AsmProgram:
     p.label(LBL_TRAP_VEC_INIT)
     p.la("x13", LBL_OTHER_EXP)
     p.csrw(CSR.MTVEC, "x13", comment="MTVEC")
+    p.la("x13", LBL_OTHER_EXP_S)
+    p.csrw(CSR.STVEC, "x13", comment="STVEC")
 
     p.label(LBL_MEPC_SETUP)
     p.la("x13", LBL_INIT)
@@ -157,14 +159,26 @@ def _nutshell_init_reg(p: AsmProgram) -> AsmProgram:
 
 def _exception_vector(p: AsmProgram) -> AsmProgram:
     """
-    [XiangShan/NutShell/Rocket] other_exp: Simple exception handling (increment mepc by 4, then mret).
+    [XiangShan/NutShell/Rocket] Exception handlers for M-mode and S-mode.
+    - other_exp: M-mode handler (increment mepc by 4, then mret)
+    - other_exp_s: S-mode handler (increment sepc by 4, then sret)
     """
+    # M-mode trap handler
     p.label(LBL_OTHER_EXP)
     p.option("norvc")
     p.csrr("x13", CSR.MEPC)
     p.instr("addi", "x13", "x13", "4")
     p.csrw(CSR.MEPC, "x13")
     p.mret()
+    p.option("rvc")
+
+    # S-mode trap handler
+    p.label(LBL_OTHER_EXP_S)
+    p.option("norvc")
+    p.csrr("x13", CSR.SEPC)
+    p.instr("addi", "x13", "x13", "4")
+    p.csrw(CSR.SEPC, "x13")
+    p.instr("sret")
     p.option("rvc")
     return p
 

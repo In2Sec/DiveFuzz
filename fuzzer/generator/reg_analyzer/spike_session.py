@@ -14,19 +14,20 @@
 """
 Spike Session Manager
 
-Manages spike_engine lifecycle and provides high-level instruction validation API.
+Manages spike_engine lifecycle and provides instruction execution API.
 Uses checkpoint-based rollback for efficient instruction retry without recompilation.
+
+Note: XOR computation and bug filtering have been moved to InstructionPostProcessor
+for better separation of concerns.
 """
 
 import sys
 import os
-import json
-import fcntl
 from pathlib import Path
 from typing import Optional, List, Tuple
 
 # Add spike_engine path
-SPIKE_ENGINE_PATH = Path(__file__).parent.parent.parent.parent / "ref" / "riscv-isa-sim-checkpoint" / "spike_engine"
+SPIKE_ENGINE_PATH = Path(__file__).parent.parent.parent.parent / "ref" / "riscv-isa-sim-adapter" / "spike_engine"
 sys.path.insert(0, str(SPIKE_ENGINE_PATH))
 
 try:
@@ -63,42 +64,26 @@ except ImportError as e:
     print()
 
 
-def compute_xor(values: List[int]) -> int:
-    """
-    Compute XOR value from register values using shifted XOR.
-    Replicates the C++ compute_xor algorithm.
-
-    Formula: result = (values[0] << 0) ^ (values[1] << 1) ^ (values[2] << 2) ^ ...
-
-    Args:
-        values: List of register values (and optional immediate)
-
-    Returns:
-        Computed XOR value as uint64_t equivalent
-    """
-    result = 0
-    for i, value in enumerate(values):
-        result ^= (value << i)
-    return result
-
-
 class SpikeSession:
     """
-    High-level Spike session manager with checkpoint support
+    Spike session manager with checkpoint support
+
+    Manages spike_engine lifecycle and provides instruction execution API.
 
     Workflow:
     1. Initialize: Load ELF with N nops, execute template initialization
     2. For each instruction:
        - Set checkpoint (save current state)
-       - Try instruction: encode + execute + compute XOR
-       - If unique: confirm (keep state)
-       - If duplicate: restore checkpoint (rollback)
+       - Execute instruction and get register values
+       - External: compute XOR, check uniqueness, check bugs (InstructionPostProcessor)
+       - If valid: confirm (keep state)
+       - If invalid: restore checkpoint (rollback)
     3. Cleanup: Release resources
 
     Performance: O(n) instead of O(n^2) for n instructions
     """
 
-    def __init__(self, elf_path: str, isa: str, num_instrs: int, shared_xor_cache):
+    def __init__(self, elf_path: str, isa: str, num_instrs: int):
         """
         Create Spike session
 
@@ -106,7 +91,6 @@ class SpikeSession:
             elf_path: Path to ELF file with N nop instructions
             isa: ISA string (e.g., "rv64imafdcv_zicsr_zifencei")
             num_instrs: Number of instructions to generate
-            shared_xor_cache: Manager.dict for real-time cross-process XOR sharing
 
         Raises:
             RuntimeError: If spike_engine is not available
@@ -124,11 +108,7 @@ class SpikeSession:
         # Spike engine instance
         self.engine: Optional[spike_engine.SpikeEngine] = None
 
-        # Shared XOR cache (Manager.dict)
-        self.confirmed_xor_values = shared_xor_cache
-
         # State tracking
-        self.confirmed_instructions: List[str] = []
         self.checkpoint_set: bool = False
         self.initialized: bool = False
 
@@ -177,44 +157,37 @@ class SpikeSession:
             traceback.print_exc()
             return False
 
-    def try_instruction(
+    def execute_instruction(
         self,
         machine_code: int,
         source_regs: List[int],
         dest_regs: List[int],
-        immediate: int = 0,
-        opcode: str = "unknown"
-    ) -> Tuple[Optional[int], List[int], List[int]]:
+        immediate: int = IMMEDIATE_NOT_PRESENT
+    ) -> Tuple[List[int], List[int]]:
         """
-        Try executing an instruction and check XOR uniqueness within its opcode group
+        Execute an instruction and return register values.
 
         This method:
         1. Sets checkpoint if not already set
-        2. Executes instruction with spike_engine (gets source values before, dest values after)
-        3. Computes XOR value from source values
-        4. Checks uniqueness against opcode-specific confirmed_xor_values
-        5. Returns (XOR, dest_values, source_values) if unique, (None, [], []) if duplicate
+        2. Executes instruction with spike_engine
+        3. Returns (source_values, dest_values)
+
+        Note: XOR computation and uniqueness checking are handled by
+        InstructionPostProcessor.
 
         Args:
             machine_code: 32-bit machine code
             source_regs: List of source register indices (read before execution)
             dest_regs: List of destination register indices (read after execution)
             immediate: Immediate value (default: 0)
-            opcode: Instruction opcode name (e.g., "add", "sub", "addi")
 
         Returns:
-            Tuple of (xor_value, dest_values, source_values):
-            - xor_value: XOR if unique within opcode group, None if duplicate or error
+            Tuple of (source_values, dest_values):
+            - source_values: Source register values before execution
             - dest_values: Destination register values after execution
-            - source_values: Source register values before execution (for bug filtering)
 
-        Note:
-            This method does NOT modify confirmed state.
-            Call confirm_instruction() after getting a unique XOR.
-
-        Design rationale:
-            Different instruction types (add vs sub) should have independent XOR pools,
-            as they test different hardware units even with same source register values.
+        Raises:
+            RuntimeError: If session not initialized or execution fails
         """
         if not self.initialized:
             raise RuntimeError("Session not initialized. Call initialize() first.")
@@ -238,60 +211,18 @@ class SpikeSession:
             source_values = list(execution_result.source_values_before)
             dest_values = list(execution_result.dest_values_after)
 
-            # Compute XOR from source register values (before execution)
-            xor_value = compute_xor(execution_result.source_values_before)
-
-            # Create XOR list for this opcode if not exists
-            # Retry mechanism for Manager connection issues
-            max_retries = 3
-            retry_delay = 0.01  # 10ms
-
-            for retry in range(max_retries):
-                try:
-                    if opcode not in self.confirmed_xor_values:
-                        self.confirmed_xor_values[opcode] = []
-
-                    # Check uniqueness (list membership check)
-                    if xor_value in self.confirmed_xor_values[opcode]:
-                        # Duplicate XOR within this opcode group, restore checkpoint
-                        self.engine.restore_checkpoint()
-                        return None, [], []
-                    else:
-                        # Unique XOR within this opcode group
-                        return xor_value, dest_values, source_values
-
-                except (TypeError, BrokenPipeError, EOFError) as e:
-                    if retry < max_retries - 1:
-                        # Retry with exponential backoff
-                        import time
-                        time.sleep(retry_delay * (2 ** retry))
-                        continue
-                    else:
-                        # All retries failed - this is a serious error
-                        print(f"[SpikeSession] CRITICAL: Manager connection failed after {max_retries} retries")
-                        print(f"  Opcode: {opcode}, Error: {e}")
-                        print(f"  Cross-process XOR sharing is broken, terminating process")
-                        try:
-                            self.engine.restore_checkpoint()
-                        except:
-                            pass
-                        # Raise exception to terminate this worker process
-                        raise RuntimeError(
-                            f"Manager connection lost and cannot be recovered. "
-                            f"This worker process must terminate to prevent generating duplicate XOR values."
-                        )
+            return source_values, dest_values
 
         except Exception as e:
             # Print detailed exception information
             import traceback
-            print(f"[SpikeSession] Exception in try_instruction:")
+            print(f"[SpikeSession] Exception in execute_instruction:")
             print(f"  Exception type: {type(e).__name__}")
             print(f"  Exception message: {str(e)}")
             print(f"  Machine code: 0x{machine_code:08x}")
             print(f"  Source regs: {source_regs}")
             print(f"  Dest regs: {dest_regs}")
             print(f"  Immediate: {immediate}")
-            # Print traceback for debugging
             traceback.print_exc()
             # Try to restore checkpoint on error
             try:
@@ -299,64 +230,15 @@ class SpikeSession:
                     self.engine.restore_checkpoint()
             except:
                 pass
-            return None, [], []
+            raise
 
-    def confirm_instruction(self, xor_value: int, instruction: str = "", opcode: str = "unknown"):
+    def confirm_instruction(self):
         """
-        Confirm an instruction as accepted
+        Confirm current instruction and prepare for next.
 
-        This should be called after try_instruction returns a unique XOR.
-        It updates the confirmed state and prepares for the next instruction.
-
-        Args:
-            xor_value: XOR value to add to opcode-specific list
-            instruction: Instruction string (optional, for debugging)
-            opcode: Instruction opcode name (e.g., "add", "sub", "addi")
-
-        Side effects:
-            - Adds xor_value to opcode-specific confirmed_xor_values list
-            - Appends instruction to confirmed_instructions
-            - Clears checkpoint_set flag (next try will set new checkpoint)
+        Clears checkpoint flag so next execute_instruction will set new checkpoint.
         """
-        # Retry mechanism for Manager connection issues
-        max_retries = 3
-        retry_delay = 0.01  # 10ms
-
-        for retry in range(max_retries):
-            try:
-                # IMPORTANT: Manager.dict requires reassignment to sync nested changes
-                if opcode not in self.confirmed_xor_values:
-                    self.confirmed_xor_values[opcode] = []
-
-                # Get current list, append value, then reassign to trigger sync
-                current_list = self.confirmed_xor_values[opcode]
-                current_list = list(current_list)  # Convert to regular list
-                current_list.append(xor_value)
-                self.confirmed_xor_values[opcode] = current_list  # Reassign to trigger sync
-
-                if instruction:
-                    self.confirmed_instructions.append(instruction)
-
-                # Clear checkpoint flag - next try_instruction will set new checkpoint
-                self.checkpoint_set = False
-                return  # Success
-
-            except (TypeError, BrokenPipeError, EOFError) as e:
-                if retry < max_retries - 1:
-                    # Retry with exponential backoff
-                    import time
-                    time.sleep(retry_delay * (2 ** retry))
-                    continue
-                else:
-                    # All retries failed - this is a serious error
-                    print(f"[SpikeSession] CRITICAL: Manager connection failed in confirm_instruction after {max_retries} retries")
-                    print(f"  Opcode: {opcode}, Error: {e}")
-                    print(f"  Cross-process XOR sharing is broken, terminating process")
-                    # Raise exception to terminate this worker process
-                    raise RuntimeError(
-                        f"Manager connection lost and cannot be recovered. "
-                        f"This worker process must terminate to prevent generating duplicate XOR values."
-                    )
+        self.checkpoint_set = False
 
     def restore_checkpoint_and_reset(self):
         """
@@ -374,15 +256,6 @@ class SpikeSession:
 
         self.engine.restore_checkpoint()
         self.checkpoint_set = False
-
-    def get_confirmed_count(self) -> int:
-        """
-        Get number of confirmed instructions
-
-        Returns:
-            Number of instructions confirmed so far
-        """
-        return len(self.confirmed_instructions)
 
     def get_current_pc(self) -> int:
         """
@@ -432,6 +305,215 @@ class SpikeSession:
             raise RuntimeError("Session not initialized")
         return self.engine.get_fpr(reg_index)
 
+    def get_all_xpr(self) -> List[int]:
+        """
+        Get all general-purpose register values
+
+        Returns:
+            List of 32 register values (x0-x31)
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return list(self.engine.get_all_xpr())
+
+    def get_all_fpr(self) -> List[int]:
+        """
+        Get all floating-point register values
+
+        Returns:
+            List of 32 register values (f0-f31)
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return list(self.engine.get_all_fpr())
+
+    def get_csr(self, csr_addr: int) -> int:
+        """
+        Get CSR value by address
+
+        Args:
+            csr_addr: CSR address (e.g., 0x300 for mstatus)
+
+        Returns:
+            CSR value, or 0 if not found/accessible
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self.engine.get_csr(csr_addr)
+
+    def get_all_csrs(self) -> dict:
+        """
+        Get all accessible CSR values
+
+        Returns:
+            Dict mapping CSR address to value
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return dict(self.engine.get_all_csrs())
+
+    def get_mem_region_info(self) -> Tuple[int, int]:
+        """
+        Get mem_region address information for testing memory operations
+
+        Returns:
+            Tuple of (start_address, size)
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return (self.engine.get_mem_region_start(), self.engine.get_mem_region_size())
+
+    def read_memory(self, addr: int, size: int) -> bytes:
+        """
+        Read memory at specified address
+
+        Args:
+            addr: Memory address to read from
+            size: Number of bytes to read
+
+        Returns:
+            Bytes read from memory
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return bytes(self.engine.read_mem(addr, size))
+
+    def get_all_registers(self) -> dict:
+        """
+        Get all registers (XPR, FPR, PC) as a dictionary
+
+        Returns:
+            Dict with keys 'xpr' (list of 32 values), 'fpr' (list of 32 values), 'pc' (int)
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return {
+            'xpr': self.get_all_xpr(),
+            'fpr': self.get_all_fpr(),
+            'pc': self.get_current_pc()
+        }
+
+    def execute_jump_sequence(
+        self,
+        machine_codes: List[int],
+        sizes: List[int]
+    ) -> int:
+        """
+        Execute a jump sequence (forward jump with middle instructions)
+
+        This method executes a pre-compiled sequence of instructions without
+        XOR validation. Used for jump sequences where labels have been
+        resolved to offsets.
+
+        Args:
+            machine_codes: List of machine codes to execute
+            sizes: List of instruction sizes (2 or 4 bytes)
+
+        Returns:
+            Number of instructions executed
+
+        Raises:
+            RuntimeError: If session not initialized or execution fails
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized. Call initialize() first.")
+
+        try:
+            # Clear checkpoint since we're executing a sequence
+            self.checkpoint_set = False
+
+            # Execute the sequence
+            executed = self.engine.execute_instruction_sequence(machine_codes, sizes)
+
+            return executed
+
+        except Exception as e:
+            import traceback
+            print(f"[SpikeSession] Exception in execute_jump_sequence:")
+            print(f"  Exception: {e}")
+            traceback.print_exc()
+            raise
+
+    def execute_loop_sequence(
+        self,
+        init_code: int,
+        init_size: int,
+        loop_body_codes: List[int],
+        loop_body_sizes: List[int],
+        decr_code: int,
+        decr_size: int,
+        branch_code: int,
+        branch_size: int,
+        max_iterations: int = 100
+    ) -> int:
+        """
+        Execute a backward loop sequence
+
+        Executes: init + (loop_body + decr + branch)* until branch falls through.
+        No XOR validation is performed.
+
+        Args:
+            init_code: Initialization instruction code (e.g., li s11, 5)
+            init_size: Size of init instruction
+            loop_body_codes: List of loop body instruction codes
+            loop_body_sizes: List of loop body instruction sizes
+            decr_code: Decrement instruction code (e.g., addi s11, s11, -1)
+            decr_size: Size of decrement instruction
+            branch_code: Branch instruction code (e.g., bne s11, zero, offset)
+            branch_size: Size of branch instruction
+            max_iterations: Maximum iterations (safety limit)
+
+        Returns:
+            Actual number of iterations executed
+
+        Raises:
+            RuntimeError: If session not initialized or execution fails
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized. Call initialize() first.")
+
+        try:
+            # Clear checkpoint since we're executing a sequence
+            self.checkpoint_set = False
+
+            # Execute the loop
+            iterations = self.engine.execute_loop_sequence(
+                init_code, init_size,
+                loop_body_codes, loop_body_sizes,
+                decr_code, decr_size,
+                branch_code, branch_size,
+                max_iterations
+            )
+
+            return iterations
+
+        except Exception as e:
+            import traceback
+            print(f"[SpikeSession] Exception in execute_loop_sequence:")
+            print(f"  Exception: {e}")
+            traceback.print_exc()
+            raise
 
     def cleanup(self):
         """

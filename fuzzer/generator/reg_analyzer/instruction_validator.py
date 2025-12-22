@@ -1,8 +1,14 @@
 """
 Instruction Validator
 
-Integrates encoder + parser + spike_session for high-level instruction validation.
-Provides a simple API: validate_instruction(instruction_str) -> Optional[xor_value]
+Integrates encoder + parser + spike_session + post_processor for high-level instruction validation.
+Provides a simple API for instruction validation with XOR uniqueness and bug filtering.
+
+Architecture:
+- HybridEncoder: Assembly -> machine code
+- InstructionParser: Extract operands and registers
+- SpikeSession: Execute instruction and manage checkpoints
+- InstructionPostProcessor: XOR computation, uniqueness check, bug filtering
 """
 
 from typing import Optional, Tuple, List
@@ -10,7 +16,8 @@ from typing import Optional, Tuple, List
 try:
     from .hybrid_encoder import HybridEncoder
     from .instruction_parser import InstructionParser
-    from .spike_session import SpikeSession
+    from .spike_session import SpikeSession, IMMEDIATE_NOT_PRESENT
+    from .instruction_post_processor import InstructionPostProcessor
 except ImportError:
     # For standalone testing
     import sys
@@ -18,7 +25,8 @@ except ImportError:
     sys.path.append(str(Path(__file__).parent))
     from hybrid_encoder import HybridEncoder
     from instruction_parser import InstructionParser
-    from spike_session import SpikeSession
+    from spike_session import SpikeSession, IMMEDIATE_NOT_PRESENT
+    from instruction_post_processor import InstructionPostProcessor
 
 
 class InstructionValidator:
@@ -28,22 +36,26 @@ class InstructionValidator:
     Combines:
     - HybridEncoder: Assembly -> machine code
     - InstructionParser: Extract operands and source registers
-    - RegisterMapping: Register names -> indices
-    - SpikeSession: Execute and validate uniqueness
+    - SpikeSession: Execute instruction
+    - InstructionPostProcessor: XOR computation, uniqueness check, bug filtering
 
     Usage:
-        validator = InstructionValidator(spike_session, encoder)
-        xor_value = validator.validate_instruction("add x1, x2, x3")
-        if xor_value is not None:
-            # Unique, accept instruction
-            spike_session.confirm_instruction(xor_value, "add x1, x2, x3")
+        post_processor = InstructionPostProcessor(shared_xor_cache, architecture)
+        validator = InstructionValidator(spike_session, post_processor, encoder)
+
+        # validate_instruction auto-confirms/rejects based on result
+        if validator.validate_instruction("add x1, x2, x3"):
+            # Instruction accepted
+            pass
         else:
-            # Duplicate, retry with different instruction
+            # Duplicate XOR or triggers bug, retry with different instruction
+            pass
     """
 
     def __init__(
         self,
         spike_session: SpikeSession,
+        post_processor: InstructionPostProcessor,
         encoder: Optional[HybridEncoder] = None
     ):
         """
@@ -51,9 +63,11 @@ class InstructionValidator:
 
         Args:
             spike_session: Initialized SpikeSession instance
+            post_processor: InstructionPostProcessor for XOR and bug filtering
             encoder: HybridEncoder instance (optional, creates default if None)
         """
         self.spike_session = spike_session
+        self.post_processor = post_processor
 
         if encoder is None:
             self.encoder = HybridEncoder(quiet=True)
@@ -103,61 +117,135 @@ class InstructionValidator:
             traceback.print_exc()
             return None, "", [], [], None
 
-    def validate_instruction(self, instruction: str) -> Tuple[Optional[int], List[int], List[int]]:
-        """
-        Validate instruction and return XOR, dest values, and source values if unique
+    # Debug output file handle (class-level, shared across instances)
+    _debug_file = None
+    _debug_enabled = False
+    _accepted_only = False  # If True, only log ACCEPTED instructions
+    _instr_counter = 0
 
-        This is the main entry point for instruction validation.
+    @classmethod
+    def enable_debug_output(cls, filepath: str, accepted_only: bool = False):
+        """
+        Enable debug output to file
+
+        Args:
+            filepath: Path to the debug output file
+            accepted_only: If True, only log ACCEPTED instructions (default: False)
+        """
+        cls._debug_file = open(filepath, 'w')
+        cls._debug_enabled = True
+        cls._accepted_only = accepted_only
+        cls._instr_counter = 0
+
+        mode_str = "ACCEPTED only" if accepted_only else "ALL (ACCEPTED/REJECTED)"
+        cls._debug_file.write("# SPIKE_ENGINE DEBUG OUTPUT\n")
+        cls._debug_file.write(f"# Mode: {mode_str}\n")
+        cls._debug_file.write("# Format: [ACCEPTED/REJECTED] instruction\n")
+        cls._debug_file.write("#   Machine code: 0xXXXX, PC after: 0xXXXX\n")
+        cls._debug_file.write("#   Source regs: [indices] -> [hex values]\n")
+        cls._debug_file.write("#   Dest regs: [indices] -> [hex values]\n")
+        cls._debug_file.write("#" + "=" * 79 + "\n\n")
+
+    @classmethod
+    def disable_debug_output(cls):
+        """Disable debug output"""
+        if cls._debug_file:
+            cls._debug_file.close()
+            cls._debug_file = None
+        cls._debug_enabled = False
+
+    def validate_instruction(self, instruction: str) -> bool:
+        """
+        Validate instruction with XOR uniqueness and bug filtering.
+
         Complete pipeline:
         1. Parse and encode instruction
-        2. Extract source/dest registers and immediate
-        3. Execute in Spike (gets source values before, dest values after execution)
-        4. Compute XOR and check uniqueness
-        5. Return (XOR, dest_values, source_values) for bug filtering
+        2. Execute in Spike
+        3. Compute XOR and check uniqueness
+        4. Check for known bugs
+        5. Auto-confirm if valid, auto-reject if invalid
 
         Args:
             instruction: Assembly instruction string
 
         Returns:
-            Tuple of (xor_value, dest_values, source_values):
-            - xor_value: XOR if unique within opcode group, None if duplicate
-            - dest_values: Destination register values after execution
-            - source_values: Source register values before execution
-
-        Note:
-            If xor_value is not None, caller must:
-            1. Check bug_filter.filter_known_bug(opcode, dest_values, source_values)
-            2. If no bug, call spike_session.confirm_instruction(xor_value, instruction, opcode)
-
-        Example:
-            >>> xor_value, dest_vals, src_vals = validator.validate_instruction("sc.w s9, a7, (t6)")
-            >>> if xor_value is not None:
-            ...     bug_name = bug_filter.filter_known_bug("sc.w", dest_vals, src_vals)
-            ...     if not bug_name:
-            ...         spike_session.confirm_instruction(xor_value, instruction, "sc.w")
+            True if instruction is valid (unique XOR, no bugs), False otherwise.
+            On True: state is confirmed, ready for next instruction.
+            On False: checkpoint restored, caller should retry with different instruction.
         """
         # Extract all instruction information
         machine_code, opcode, source_regs, dest_regs, immediate = self.extract_instruction_info(instruction)
 
         if machine_code is None:
-            return None, [], []
+            return False
 
         # Convert None to IMMEDIATE_NOT_PRESENT for spike_engine
-        from .spike_session import IMMEDIATE_NOT_PRESENT
         immediate_value = IMMEDIATE_NOT_PRESENT if immediate is None else immediate
 
-        # Execute in Spike and get XOR, dest values, and source values
-        xor_value, dest_values, source_values = self.spike_session.try_instruction(
-            machine_code,
-            source_regs,
-            dest_regs,
-            immediate_value,
-            opcode=opcode
-        )
+        try:
+            # Execute in Spike and get register values
+            source_values, dest_values = self.spike_session.execute_instruction(
+                machine_code,
+                source_regs,
+                dest_regs,
+                immediate_value
+            )
 
-        return xor_value, dest_values, source_values
+            # Process result: compute XOR, check uniqueness, check bugs
+            xor_value, is_unique, bug_name = self.post_processor.process_result(
+                opcode,
+                source_values,
+                dest_values
+            )
+
+            # Check validity
+            is_valid = is_unique and (bug_name is None)
+
+            # Debug output
+            if InstructionValidator._debug_enabled and InstructionValidator._debug_file:
+                # Skip REJECTED instructions if accepted_only mode is enabled
+                should_log = is_valid or not InstructionValidator._accepted_only
+
+                if should_log:
+                    pc_after = self.spike_session.get_current_pc()
+                    status = "[ACCEPTED]" if is_valid else "[REJECTED]"
+                    f = InstructionValidator._debug_file
+                    f.write(f"{status} {instruction}\n")
+                    f.write(f"  Machine code: 0x{machine_code:08x}, PC after: 0x{pc_after:x}\n")
+                    f.write(f"  Source regs: {source_regs} -> {[hex(v) for v in source_values]}\n")
+                    f.write(f"  Dest regs: {dest_regs} -> {[hex(v) for v in dest_values]}\n")
+                    if immediate is not None:
+                        f.write(f"  Immediate: {immediate} (0x{immediate & 0xffffffffffffffff:x})\n")
+                    f.write("\n")
+                    f.flush()
+                    InstructionValidator._instr_counter += 1
+
+            if is_valid:
+                # Confirm XOR and advance checkpoint
+                self.post_processor.confirm_xor(opcode, xor_value)
+                self.spike_session.confirm_instruction()
+            else:
+                # Restore checkpoint for retry
+                self.spike_session.restore_checkpoint_and_reset()
+
+            return is_valid
+
+        except Exception as e:
+            # Debug output for exceptions
+            if InstructionValidator._debug_enabled and InstructionValidator._debug_file:
+                f = InstructionValidator._debug_file
+                f.write(f"[EXCEPTION] {instruction}\n")
+                f.write(f"  Error: {e}\n\n")
+                f.flush()
+
+            # Restore checkpoint on error
+            try:
+                self.spike_session.restore_checkpoint_and_reset()
+            except:
+                pass
+            return False
 
 
 if __name__ == "__main__":
     print("InstructionValidator module")
-    print("Requires SpikeSession and HybridEncoder")
+    print("Requires SpikeSession, InstructionPostProcessor, and HybridEncoder")

@@ -45,9 +45,9 @@ class Config:
 
         self.arch_bits = 32 if self.is_rv32 else 64
         if any(ext in allowed_ext.allowed_ext for ext in ["RV64_C", "RV_C"]):
-            self.isa = 'rv' + str(self.arch_bits) + 'g_c_v_zicsr_zifencei_zfh_zba_zbb_zbkc_zbc_zbkb_zbs_zmmul_zknh_zkne_zknd_zbkx_zfa'
+            self.isa = 'rv' + str(self.arch_bits) + 'g_c_zicsr_zifencei_zfh_zba_zbb_zbkc_zbc_zbkb_zbs_zmmul_zknh_zkne_zknd_zbkx_zfa'
         else:
-            self.isa = 'rv' + str(self.arch_bits) + 'g_v_zicsr_zifencei_zfh_zba_zbb_zbkc_zbc_zbkb_zbs_zmmul_zknh_zkne_zknd_zbkx_zfa'
+            self.isa = 'rv' + str(self.arch_bits) + 'g_zicsr_zifencei_zfh_zba_zbb_zbkc_zbc_zbkb_zbs_zmmul_zknh_zkne_zknd_zbkx_zfa'
         self.arch = ArchConfig(self.arch_bits, self.isa)
         self.mutate_time = getattr(args, "mutate_time", MAX_MUTATE_TIME)
 
