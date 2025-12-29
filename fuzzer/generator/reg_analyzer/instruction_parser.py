@@ -211,6 +211,43 @@ class InstructionParser:
         return InstructionParser._REG_NAME_TO_INDEX.get(reg_name.lower())
 
     @staticmethod
+    def _is_float_register(reg_name: str) -> bool:
+        """
+        Determine if a register name is a floating-point register.
+
+        Floating-point registers:
+        - Numeric format: f0-f31
+        - ABI names: ft0-ft7, fs0-fs11, fa0-fa7, ft8-ft11
+
+        Note: 'fp' (frame pointer) is an INTEGER register (alias of s0/x8),
+        not a floating-point register!
+
+        Args:
+            reg_name: Lowercase register name (e.g., 'ft4', 'x1', 'fp')
+
+        Returns:
+            True if floating-point register, False otherwise
+        """
+        # 'fp' is an integer register (s0/x8 alias), NOT a float register!
+        if reg_name == 'fp':
+            return False
+
+        # Check if it's in the FPR ABI mapping (ft*, fs*, fa*)
+        if reg_name in InstructionParser._FPR_ABI_TO_INDEX:
+            return True
+
+        # Check f0-f31 format: must be 'f' followed by a valid number
+        if reg_name.startswith('f') and len(reg_name) >= 2:
+            try:
+                num = int(reg_name[1:])
+                if 0 <= num <= 31:
+                    return True
+            except ValueError:
+                pass
+
+        return False
+
+    @staticmethod
     def parse_instruction_full(instruction_str: str) -> Tuple[str, List[int], List[int], Optional[int]]:
         """
         Parse instruction and directly return all needed information
@@ -254,8 +291,16 @@ class InstructionParser:
         opcode = parts[0]
         operands = [op.rstrip(',') for op in parts[1:]]
 
-        # Get instruction type
-        instr_type = InstructionParser._OPCODE_TO_TYPE.get(opcode)
+        # Normalize opcode: remove .aq/.rl/.aqrl suffixes for AMO instructions
+        # e.g., "amoswap.d.rl" -> "amoswap.d", "amoadd.w.aqrl" -> "amoadd.w"
+        opcode_normalized = opcode
+        for suffix in ['.aqrl', '.aq', '.rl']:
+            if opcode.endswith(suffix):
+                opcode_normalized = opcode[:-len(suffix)]
+                break
+
+        # Get instruction type (use normalized opcode for lookup)
+        instr_type = InstructionParser._OPCODE_TO_TYPE.get(opcode_normalized)
         if instr_type is None:
             # Unknown instruction, return empty
             return opcode, [], [], None
@@ -296,9 +341,10 @@ class InstructionParser:
             idx = reg_to_idx(reg_name)
             if idx is None:
                 return 0
-            # Check if this is a floating-point register (starts with 'f')
+            # Check if this is a floating-point register
+            # Note: 'fp' is an integer register (s0/x8 alias), NOT a float register!
             reg_lower = reg_name.strip().lower()
-            if reg_lower.startswith('f'):
+            if InstructionParser._is_float_register(reg_lower):
                 return FPR_OFFSET + idx
             return idx
 

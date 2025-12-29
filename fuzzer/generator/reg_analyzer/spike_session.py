@@ -17,12 +17,12 @@ Spike Session Manager
 Manages spike_engine lifecycle and provides instruction execution API.
 Uses checkpoint-based rollback for efficient instruction retry without recompilation.
 
-Note: XOR computation and bug filtering have been moved to InstructionPostProcessor
-for better separation of concerns.
+Simplified API (v3.0):
+- execute_sequence(): Unified method for all execution scenarios
+- Python layer manually reads registers before/after execution for XOR validation
 """
 
 import sys
-import os
 from pathlib import Path
 from typing import Optional, List, Tuple
 
@@ -33,23 +33,21 @@ sys.path.insert(0, str(SPIKE_ENGINE_PATH))
 try:
     import spike_engine
     SPIKE_ENGINE_AVAILABLE = True
-    IMMEDIATE_NOT_PRESENT = spike_engine.IMMEDIATE_NOT_PRESENT
 except ImportError as e:
     SPIKE_ENGINE_AVAILABLE = False
     spike_engine = None
-    IMMEDIATE_NOT_PRESENT = -(2**63)  # Fallback value
     print(f"\n[WARNING] spike_engine import failed")
     print(f"  Import error: {e}")
     print(f"  Expected path: {SPIKE_ENGINE_PATH}")
     print(f"  Path exists: {SPIKE_ENGINE_PATH.exists()}")
     print(f"  Python version: {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
-    
+
     if SPIKE_ENGINE_PATH.exists():
         so_files = list(SPIKE_ENGINE_PATH.glob("spike_engine*.so"))
         print(f"  Found .so files: {len(so_files)}")
         for so in so_files:
             print(f"    - {so.name}")
-    
+
         if not so_files:
             print(f"  → spike_engine not built. Run: cd {SPIKE_ENGINE_PATH} && make")
         else:
@@ -70,12 +68,14 @@ class SpikeSession:
 
     Manages spike_engine lifecycle and provides instruction execution API.
 
-    Workflow:
+    Simplified Workflow (v3.0):
     1. Initialize: Load ELF with N nops, execute template initialization
     2. For each instruction:
        - Set checkpoint (save current state)
-       - Execute instruction and get register values
-       - External: compute XOR, check uniqueness, check bugs (InstructionPostProcessor)
+       - Read source register values (Python: get_xpr/get_fpr)
+       - Execute instruction(s) via execute_sequence()
+       - Read destination register values (Python: get_xpr/get_fpr)
+       - Python computes XOR and checks uniqueness
        - If valid: confirm (keep state)
        - If invalid: restore checkpoint (rollback)
     3. Cleanup: Release resources
@@ -143,12 +143,6 @@ class SpikeSession:
                 return False
 
             self.initialized = True
-            # print(f"[SpikeSession] Initialized successfully")
-            # print(f"  ELF: {self.elf_path}")
-            # print(f"  ISA: {self.isa}")
-            # print(f"  Num instrs: {self.num_instrs}")
-            # print(f"  Initial PC: {hex(self.engine.get_pc())}")
-
             return True
 
         except Exception as e:
@@ -157,34 +151,27 @@ class SpikeSession:
             traceback.print_exc()
             return False
 
-    def execute_instruction(
+    def execute_sequence(
         self,
-        machine_code: int,
-        source_regs: List[int],
-        dest_regs: List[int],
-        immediate: int = IMMEDIATE_NOT_PRESENT
-    ) -> Tuple[List[int], List[int]]:
+        machine_codes: List[int],
+        sizes: List[int],
+        max_steps: int = 10000
+    ) -> int:
         """
-        Execute an instruction and return register values.
+        Execute a sequence of instructions
 
-        This method:
-        1. Sets checkpoint if not already set
-        2. Executes instruction with spike_engine
-        3. Returns (source_values, dest_values)
-
-        Note: XOR computation and uniqueness checking are handled by
-        InstructionPostProcessor.
+        Unified execution method that handles all cases:
+        - Single instruction: execute_sequence([code], [size])
+        - Forward jump: execute_sequence([jump, middle...], [sizes...])
+        - Backward loop: execute_sequence([init, body..., decr, branch], [sizes...])
 
         Args:
-            machine_code: 32-bit machine code
-            source_regs: List of source register indices (read before execution)
-            dest_regs: List of destination register indices (read after execution)
-            immediate: Immediate value (default: 0)
+            machine_codes: List of machine codes to execute
+            sizes: List of instruction sizes (2 or 4 bytes each)
+            max_steps: Maximum execution steps (safety limit)
 
         Returns:
-            Tuple of (source_values, dest_values):
-            - source_values: Source register values before execution
-            - dest_values: Destination register values after execution
+            Number of steps executed
 
         Raises:
             RuntimeError: If session not initialized or execution fails
@@ -192,51 +179,39 @@ class SpikeSession:
         if not self.initialized:
             raise RuntimeError("Session not initialized. Call initialize() first.")
 
-        try:
-            # Set checkpoint if not already set
-            # (First instruction or after confirm_instruction)
-            if not self.checkpoint_set:
-                self.engine.set_checkpoint()
-                self.checkpoint_set = True
+        return self.engine.execute_sequence(machine_codes, sizes, max_steps)
 
-            # Execute instruction and get execution result
-            execution_result = self.engine.execute_instruction(
-                machine_code,
-                source_regs,
-                dest_regs,
-                immediate
-            )
+    def execute_single(self, machine_code: int, size: Optional[int] = None) -> int:
+        """
+        Execute a single instruction (convenience method)
 
-            # Extract values from execution result
-            source_values = list(execution_result.source_values_before)
-            dest_values = list(execution_result.dest_values_after)
+        Args:
+            machine_code: 32-bit machine code
+            size: Instruction size (auto-detected if None)
 
-            return source_values, dest_values
+        Returns:
+            Number of steps executed (typically 1)
+        """
+        if size is None:
+            size = spike_engine.SpikeEngine.get_instruction_size(machine_code)
+        return self.execute_sequence([machine_code], [size])
 
-        except Exception as e:
-            # Print detailed exception information
-            import traceback
-            print(f"[SpikeSession] Exception in execute_instruction:")
-            print(f"  Exception type: {type(e).__name__}")
-            print(f"  Exception message: {str(e)}")
-            print(f"  Machine code: 0x{machine_code:08x}")
-            print(f"  Source regs: {source_regs}")
-            print(f"  Dest regs: {dest_regs}")
-            print(f"  Immediate: {immediate}")
-            traceback.print_exc()
-            # Try to restore checkpoint on error
-            try:
-                if self.checkpoint_set:
-                    self.engine.restore_checkpoint()
-            except:
-                pass
-            raise
+    def set_checkpoint(self):
+        """
+        Set checkpoint for current state
+
+        Call this before executing instructions that may need to be rolled back.
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        self.engine.set_checkpoint()
+        self.checkpoint_set = True
 
     def confirm_instruction(self):
         """
         Confirm current instruction and prepare for next.
 
-        Clears checkpoint flag so next execute_instruction will set new checkpoint.
+        Clears checkpoint flag so next operation will set new checkpoint if needed.
         """
         self.checkpoint_set = False
 
@@ -249,7 +224,7 @@ class SpikeSession:
 
         Side effects:
             - Restores processor state to last checkpoint
-            - Resets checkpoint_set flag so next try_instruction will set new checkpoint
+            - Resets checkpoint_set flag
         """
         if not self.initialized:
             raise RuntimeError("Session not initialized")
@@ -414,106 +389,39 @@ class SpikeSession:
             'pc': self.get_current_pc()
         }
 
-    def execute_jump_sequence(
-        self,
-        machine_codes: List[int],
-        sizes: List[int]
-    ) -> int:
+    def was_last_execution_trapped(self) -> bool:
         """
-        Execute a jump sequence (forward jump with middle instructions)
+        Check if the last executed instruction triggered a trap/exception.
 
-        This method executes a pre-compiled sequence of instructions without
-        XOR validation. Used for jump sequences where labels have been
-        resolved to offsets.
-
-        Args:
-            machine_codes: List of machine codes to execute
-            sizes: List of instruction sizes (2 or 4 bytes)
+        This is useful for logging - instructions that cause traps are handled
+        by the exception handler (which skips them), but they are still "accepted"
+        from the fuzzer's perspective.
 
         Returns:
-            Number of instructions executed
+            True if the last instruction triggered a trap, False otherwise
 
         Raises:
-            RuntimeError: If session not initialized or execution fails
+            RuntimeError: If session not initialized
         """
         if not self.initialized:
-            raise RuntimeError("Session not initialized. Call initialize() first.")
+            raise RuntimeError("Session not initialized")
+        return self.engine.was_last_execution_trapped()
 
-        try:
-            # Clear checkpoint since we're executing a sequence
-            self.checkpoint_set = False
-
-            # Execute the sequence
-            executed = self.engine.execute_instruction_sequence(machine_codes, sizes)
-
-            return executed
-
-        except Exception as e:
-            import traceback
-            print(f"[SpikeSession] Exception in execute_jump_sequence:")
-            print(f"  Exception: {e}")
-            traceback.print_exc()
-            raise
-
-    def execute_loop_sequence(
-        self,
-        init_code: int,
-        init_size: int,
-        loop_body_codes: List[int],
-        loop_body_sizes: List[int],
-        decr_code: int,
-        decr_size: int,
-        branch_code: int,
-        branch_size: int,
-        max_iterations: int = 100
-    ) -> int:
+    def get_last_trap_handler_steps(self) -> int:
         """
-        Execute a backward loop sequence
+        Get the number of trap handler steps executed in the last execution.
 
-        Executes: init + (loop_body + decr + branch)* until branch falls through.
-        No XOR validation is performed.
-
-        Args:
-            init_code: Initialization instruction code (e.g., li s11, 5)
-            init_size: Size of init instruction
-            loop_body_codes: List of loop body instruction codes
-            loop_body_sizes: List of loop body instruction sizes
-            decr_code: Decrement instruction code (e.g., addi s11, s11, -1)
-            decr_size: Size of decrement instruction
-            branch_code: Branch instruction code (e.g., bne s11, zero, offset)
-            branch_size: Size of branch instruction
-            max_iterations: Maximum iterations (safety limit)
+        Returns 0 if no trap occurred.
 
         Returns:
-            Actual number of iterations executed
+            Number of steps executed in trap handler
 
         Raises:
-            RuntimeError: If session not initialized or execution fails
+            RuntimeError: If session not initialized
         """
         if not self.initialized:
-            raise RuntimeError("Session not initialized. Call initialize() first.")
-
-        try:
-            # Clear checkpoint since we're executing a sequence
-            self.checkpoint_set = False
-
-            # Execute the loop
-            iterations = self.engine.execute_loop_sequence(
-                init_code, init_size,
-                loop_body_codes, loop_body_sizes,
-                decr_code, decr_size,
-                branch_code, branch_size,
-                max_iterations
-            )
-
-            return iterations
-
-        except Exception as e:
-            import traceback
-            print(f"[SpikeSession] Exception in execute_loop_sequence:")
-            print(f"  Exception: {e}")
-            traceback.print_exc()
-            raise
+            raise RuntimeError("Session not initialized")
+        return self.engine.get_last_trap_handler_steps()
 
     def cleanup(self):
         """

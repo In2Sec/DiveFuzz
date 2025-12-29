@@ -117,22 +117,41 @@ class RegisterMapping:
     @staticmethod
     def is_float_register(reg_name: str) -> bool:
         """
-        Determine if a register name is a floating-point register based on its prefix.
+        Determine if a register name is a floating-point register.
+
+        Floating-point registers:
+        - Numeric format: f0-f31
+        - ABI names: ft0-ft7, fs0-fs11, fa0-fa7, ft8-ft11
+
+        Note: 'fp' (frame pointer) is an INTEGER register (alias of s0/x8),
+        not a floating-point register!
 
         Args:
-            reg_name: Register name (e.g., 'ft4', 'x1', 'ra')
+            reg_name: Register name (e.g., 'ft4', 'x1', 'ra', 'fp')
 
         Returns:
             True if floating-point register, False otherwise
         """
         reg_name = reg_name.strip().lower()
 
-        # Floating-point registers start with 'f' or match FPR ABI names
-        if reg_name.startswith('f'):
+        # IMPORTANT: 'fp' is an integer register (s0/x8 alias), not a float register!
+        if reg_name == 'fp':
+            return False
+
+        # Check if it's in the FPR ABI mapping (ft*, fs*, fa*)
+        if reg_name in _FPR_ABI_TO_NUM:
             return True
 
-        # Check if it's in the FPR ABI mapping
-        return reg_name in _FPR_ABI_TO_NUM
+        # Check f0-f31 format: must be 'f' followed by a valid number
+        if reg_name.startswith('f') and len(reg_name) >= 2:
+            try:
+                num = int(reg_name[1:])
+                if 0 <= num <= 31:
+                    return True
+            except ValueError:
+                pass
+
+        return False
 
     @staticmethod
     def convert_register_name_smart(reg_name: str) -> Optional[int]:

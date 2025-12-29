@@ -30,12 +30,11 @@ from ...instr_generator import (
     generate_new_instr,
     reg_range
 )
-from ...reg_analyzer.nop_template_gen import generate_nop_elf
+from ...reg_analyzer.nop_template_gen import generate_nop_elf, NOP_REDUNDANCY
 from ...reg_analyzer.spike_session import SpikeSession, SPIKE_ENGINE_AVAILABLE
 from ...reg_analyzer.instruction_validator import InstructionValidator
-from ...reg_analyzer.instruction_post_processor import InstructionPostProcessor
+from ...reg_analyzer.xor_cache import XORCache
 from ...reg_analyzer.hybrid_encoder import HybridEncoder
-from ...reg_analyzer.jump_sequence_compiler import JumpSequenceCompiler
 from ...utils import list2str
 from .register_history import RegisterHistory
 from ...instr_generator.label_manager import LabelManager
@@ -59,8 +58,21 @@ def generate_forward_jump_instrs(
     Generate middle instructions for forward jump sequence.
 
     Returns list of assembly instruction strings (without jump/branch).
+
+    Note: Memory-modifying instructions (AMO, STORE) are excluded to avoid
+    state divergence between spike_engine validation and final program execution.
+    These instructions are not individually validated by InstructionValidator,
+    so their memory modifications could cause different behavior in subsequent
+    instructions that depend on memory state.
     """
     middle_instrs = []
+
+    # Categories that modify memory - excluded to avoid state divergence
+    # AMO instructions read-modify-write memory, STORE instructions write memory
+    MEMORY_MODIFYING_CATEGORIES = {
+        'AMO', 'AMO_LOAD', 'AMO_STORE',
+        'STORE', 'STORE_SP', 'FLOAT_STORE'
+    }
 
     for _ in range(target_distance):
         # Select extension
@@ -73,11 +85,15 @@ def generate_forward_jump_instrs(
         instrs_complete = INSTRUCTION_FORMATS[ext]
         instrs = list(instrs_complete.keys())
 
-        # Filter out jumps, branches, and compressed instructions
+        # Filter out jumps, branches, compressed instructions, and memory-modifying instructions
+        # Memory-modifying instructions are excluded because:
+        # 1. They are not individually validated by InstructionValidator
+        # 2. Their side effects could cause state divergence in subsequent instructions
         filtered = [instr for instr in instrs
                    if 'LABEL' not in get_instruction_format(instr).get('variables', [])
                    and 'JUMP' not in get_instruction_format(instr).get('category', [])
                    and 'BRANCH' not in get_instruction_format(instr).get('category', [])
+                   and get_instruction_format(instr).get('category', '') not in MEMORY_MODIFYING_CATEGORIES
                    and not instr.startswith('c.')
                    and instr not in special_instr]
 
@@ -118,8 +134,17 @@ def generate_loop_body_instrs(
     Generate loop body instructions (excluding counter register modifications).
 
     Returns list of assembly instruction strings.
+
+    Note: Memory-modifying instructions (AMO, STORE) are excluded for the same
+    reason as in generate_forward_jump_instrs - to avoid state divergence.
     """
     loop_body = []
+
+    # Categories that modify memory - excluded to avoid state divergence
+    MEMORY_MODIFYING_CATEGORIES = {
+        'AMO', 'AMO_LOAD', 'AMO_STORE',
+        'STORE', 'STORE_SP', 'FLOAT_STORE'
+    }
 
     for _ in range(target_distance):
         # Select extension
@@ -131,11 +156,12 @@ def generate_loop_body_instrs(
         instrs_complete = INSTRUCTION_FORMATS[ext]
         instrs = list(instrs_complete.keys())
 
-        # Filter out jumps, branches, compressed instructions
+        # Filter out jumps, branches, compressed instructions, and memory-modifying instructions
         filtered = [instr for instr in instrs
                    if 'LABEL' not in get_instruction_format(instr).get('variables', [])
                    and 'JUMP' not in get_instruction_format(instr).get('category', [])
                    and 'BRANCH' not in get_instruction_format(instr).get('category', [])
+                   and get_instruction_format(instr).get('category', '') not in MEMORY_MODIFYING_CATEGORIES
                    and not instr.startswith('c.')
                    and instr not in special_instr]
 
@@ -180,8 +206,9 @@ def generate_instructions(instr_number: int,
                           arch: ArchConfig,
                           template_type: str,
                           out_dir: str,
-                          shared_xor_cache,
-                          architecture: str):
+                          shared_xor_cache,  # Deprecated: kept for API compatibility
+                          architecture: str,
+                          debug_config: dict = None):
     """
     Generate random RISC-V instructions for a single seed.
 
@@ -194,9 +221,11 @@ def generate_instructions(instr_number: int,
         arch: Architecture configuration for template creation
         template_type: Template type name
         out_dir: Output directory for seeds and XOR cache
-        shared_xor_cache: Manager.dict for cross-process XOR sharing
+        shared_xor_cache: (Deprecated) Not used - XOR cache is now per-process LOCAL mode
         architecture: Architecture for bug filtering ('xs', 'nts', 'rkt', 'kmh')
+        debug_config: Debug configuration dict (see generate_instructions_parallel)
     """
+    # Note: shared_xor_cache is no longer used (v4.0 architecture uses LOCAL XORCache)
 
     # Create fresh template instance for this seed with random type and values
     # This ensures each seed gets independent random content (MSTATUS, register init, etc.)
@@ -206,67 +235,78 @@ def generate_instructions(instr_number: int,
         # Initialize Spike session for eliminate mode (checkpoint-based validation)
         spike_session = None
         validator = None
-        post_processor = None
+        xor_cache = None
         if eliminate_enable and SPIKE_ENGINE_AVAILABLE:
             try:
                 # Generate NOP ELF template
+                # Note: generate_nop_elf internally adds NOP_REDUNDANCY extra NOPs
                 elf_path = f"/dev/shm/template_{seed_times}_{instr_number}.elf"
                 elf_path = generate_nop_elf(template, instr_number, elf_path)
 
-                # Create SpikeSession (decoupled from XOR logic)
+                # Create SpikeSession with total instruction capacity (including redundancy)
+                # This ensures spike_engine can handle pseudo-instruction expansion
                 spike_session = SpikeSession(
                     elf_path,
                     template.isa,
-                    instr_number
+                    instr_number + NOP_REDUNDANCY
                 )
                 if spike_session.initialize():
-                    # Create post processor for XOR computation and bug filtering
-                    # This handles cross-process XOR sharing and bug pattern matching
-                    post_processor = InstructionPostProcessor(
-                        shared_xor_cache,
-                        architecture
+                    # Create XOR cache for this process
+                    xor_cache = XORCache()
+                    xor_cache.create()
+
+                    # Create validator with simplified architecture (v4.0)
+                    encoder = HybridEncoder(quiet=True)
+                    validator = InstructionValidator(
+                        spike_session=spike_session,
+                        xor_cache=xor_cache,
+                        architecture=architecture,
+                        encoder=encoder
                     )
 
-                    # Create validator with spike_session and post_processor
-                    encoder = HybridEncoder(quiet=True)
-                    validator = InstructionValidator(spike_session, post_processor, encoder)
-                    # print(f"[Seed {seed_times}] Using checkpoint-based validation")
-                    # Create jump sequence compiler for handling jump instructions
-                    jump_compiler = JumpSequenceCompiler(encoder.encoder)
+                    # Enable detailed debug output if debug_config is provided
+                    if debug_config and debug_config.get('enabled', False):
+                        debug_output_dir = debug_config.get('output_dir', out_dir)
+                        debug_file = os.path.join(debug_output_dir, f"spike_debug_seed_{seed_times}.log")
+                        InstructionValidator.enable_detailed_debug(
+                            filepath=debug_file,
+                            mode=debug_config.get('mode', 'DIFF'),
+                            log_csr=debug_config.get('log_csr', True),
+                            log_fpr=debug_config.get('log_fpr', True),
+                            accepted_only=debug_config.get('accepted_only', False)
+                        )
+                        mode_str = debug_config.get('mode', 'DIFF')
+                        acc_str = " (ACCEPTED only)" if debug_config.get('accepted_only', False) else ""
+                        print(f"[Seed {seed_times}] Detailed debug enabled (mode={mode_str}{acc_str}): {debug_file}")
 
-                    # Enable debug output if DEBUG_SPIKE_ENGINE environment variable is set
-                    # Values:
-                    #   - "1" or "all": Log all instructions (ACCEPTED and REJECTED)
-                    #   - "accepted": Log only ACCEPTED instructions
-                    import os
+                    # Legacy: Enable debug output if DEBUG_SPIKE_ENGINE environment variable is set
                     debug_mode = os.environ.get('DEBUG_SPIKE_ENGINE', '').lower()
-                    if debug_mode:
+                    if debug_mode and not (debug_config and debug_config.get('enabled', False)):
                         debug_file = os.path.join(out_dir, f"spike_engine_debug_{seed_times}.txt")
                         accepted_only = (debug_mode == 'accepted')
                         InstructionValidator.enable_debug_output(debug_file, accepted_only=accepted_only)
                         mode_str = "ACCEPTED only" if accepted_only else "ALL"
-                        print(f"[Seed {seed_times}] Debug output enabled ({mode_str}): {debug_file}")
+                        print(f"[Seed {seed_times}] Legacy debug output enabled ({mode_str}): {debug_file}")
                 else:
                     print(f"[Seed {seed_times}] Spike initialization failed")
                     spike_session = None
                     validator = None
-                    post_processor = None
-                    jump_compiler = None
+                    xor_cache = None
+                    encoder = None
                     return 0, 0
             except Exception as e:
                 print(f"[Seed {seed_times}] Failed to initialize Spike session: {e}")
                 spike_session = None
                 validator = None
-                post_processor = None
-                jump_compiler = None
+                xor_cache = None
+                encoder = None
                 return 0, 0
         else:
-            # Non-eliminate mode: still create jump_compiler for offset calculation
+            # Non-eliminate mode: still create encoder for offset calculation
             try:
-                from ...reg_analyzer.instruction_encoder import InstructionEncoder
-                jump_compiler = JumpSequenceCompiler(InstructionEncoder())
+                encoder = HybridEncoder(quiet=True)
             except Exception:
-                jump_compiler = None
+                encoder = None
 
         # Calculate the total of explicitly assigned probabilities
         total_specified_prob = sum(allowed_ext.special_probabilities.values())
@@ -315,10 +355,20 @@ def generate_instructions(instr_number: int,
             v_ext_enable = False
 
         if v_ext_enable:
-            # v_instr_init 
+            # v_instr_init
             entire_instrs.append(v_instr_init)
-        # TO rv32
-        for i in range(instr_number):
+
+        # Maximum bytes in NOP template's main region
+        # Each nop is 4 bytes, so total = (instr_number + NOP_REDUNDANCY) * 4
+        max_bytes = (instr_number + NOP_REDUNDANCY) * 4
+        # Track actual bytes of machine instructions executed in spike
+        actual_bytes = 0
+        # Track logical instruction index (for user-requested instruction count)
+        logical_instr_index = 0
+
+        # Use while loop to properly track actual bytes
+        # (for loop index cannot be modified in Python)
+        while logical_instr_index < instr_number and actual_bytes < max_bytes:
             is_c_extension = False
 
             # Unified extension selection based on configuration and probabilities
@@ -341,6 +391,8 @@ def generate_instructions(instr_number: int,
                 instr = random.choice(instrs)
                 complete_instr = generate_new_instr(instr, extension, rd_history, rs_history, \
                                                 frd_history,frs_history)
+                # ILL instructions are single 4-byte machine instructions
+                actual_bytes += 4
 
             else:
                 try: 
@@ -369,7 +421,8 @@ def generate_instructions(instr_number: int,
                 
                     if is_direct_jump:
                         # The last instruction cannot be a jump instruction because there are no subsequent labels.
-                        if i == instr_number - 1:
+                        if logical_instr_index == instr_number - 1:
+                            logical_instr_index += 1
                             continue
 
                         # 50% probability to generate backward loop if bne instruction
@@ -392,30 +445,19 @@ def generate_instructions(instr_number: int,
                             decr_instr = f'addi {counter_reg}, {counter_reg}, -1'
                             branch_instr = f'bne {counter_reg}, zero, {{LABEL}}'
 
-                            # If jump_compiler and spike_session are available, compile and execute
-                            if jump_compiler is not None and spike_session is not None:
+                            # Initialize compiled_seq for fallback estimation
+                            compiled_seq = None
+
+                            # If encoder and spike_session are available, compile and execute
+                            if encoder is not None and spike_session is not None:
                                 try:
-                                    loop_seq = jump_compiler.compile_backward_loop(
+                                    compiled_seq = encoder.compile_backward_loop(
                                         init_instr, loop_body, decr_instr, branch_instr, label
                                     )
-                                    # Get machine codes and sizes for execution
-                                    codes_and_sizes = jump_compiler.get_machine_codes(loop_seq)
-                                    if codes_and_sizes:
-                                        # Extract init, body, decr, branch parts
-                                        init_code, init_size = codes_and_sizes[0]
-                                        body_codes = [c for c, s in codes_and_sizes[1:-2]]
-                                        body_sizes = [s for c, s in codes_and_sizes[1:-2]]
-                                        decr_code, decr_size = codes_and_sizes[-2]
-                                        branch_code, branch_size = codes_and_sizes[-1]
-
-                                        # Execute the loop sequence
-                                        spike_session.execute_loop_sequence(
-                                            init_code, init_size,
-                                            body_codes, body_sizes,
-                                            decr_code, decr_size,
-                                            branch_code, branch_size,
-                                            max_iterations=loop_iterations + 1
-                                        )
+                                    # Execute the loop sequence using unified execute_sequence
+                                    # max_steps = loop_iterations * (body + decr + branch) + init
+                                    max_steps = loop_iterations * (len(loop_body) + 2) + 2
+                                    spike_session.execute_sequence(compiled_seq.codes, compiled_seq.sizes, max_steps)
                                 except Exception as e:
                                     # If execution fails, just continue with assembly output
                                     pass
@@ -430,8 +472,19 @@ def generate_instructions(instr_number: int,
                             # Update register history
                             rd_history.use_register(counter_reg)
 
-                            # Skip i increment for the number of instructions added
-                            i += len(loop_body) + 3  # init + body + decr + branch
+                            # Update byte counts based on compiled machine code
+                            # compiled_seq contains actual machine instructions after pseudo-instruction expansion
+                            if compiled_seq is not None:
+                                seq_actual_bytes = sum(compiled_seq.sizes)
+                                if os.environ.get('DEBUG_BYTES', ''):
+                                    print(f"[Seed {seed_times}] Backward loop: sizes={compiled_seq.sizes}, total={seq_actual_bytes}")
+                            else:
+                                # Fallback: estimate based on assembly lines (assume 4 bytes each)
+                                # init(li) may expand to multiple instructions, body, decr, branch
+                                seq_actual_bytes = (len(loop_body) + 4) * 4  # conservative estimate
+
+                            actual_bytes += seq_actual_bytes
+                            logical_instr_index += len(loop_body) + 4  # init + body + decr + branch
                             continue
 
                         else:
@@ -450,34 +503,50 @@ def generate_instructions(instr_number: int,
                                 is_rv32, instrs_filter, probabilities, allowed_ext.allowed_ext
                             )
 
-                            # If jump_compiler and spike_session are available, compile and execute
-                            if jump_compiler is not None and spike_session is not None:
+                            # Initialize compiled_seq for fallback estimation
+                            compiled_seq = None
+
+                            # If encoder and spike_session are available, compile and execute
+                            if encoder is not None and spike_session is not None:
                                 try:
-                                    fwd_seq = jump_compiler.compile_forward_jump(
+                                    compiled_seq = encoder.compile_forward_jump(
                                         jump_instr, middle_instrs, label
                                     )
-                                    # Get machine codes and sizes for execution
-                                    codes_and_sizes = jump_compiler.get_machine_codes(fwd_seq)
-                                    if codes_and_sizes:
-                                        codes = [c for c, s in codes_and_sizes]
-                                        sizes = [s for c, s in codes_and_sizes]
-                                        spike_session.execute_jump_sequence(codes, sizes)
+                                    spike_session.execute_sequence(compiled_seq.codes, compiled_seq.sizes)
                                 except Exception as e:
                                     # If execution fails, just continue with assembly output
                                     pass
 
-                            # Append to output with labels (for assembly file readability)
-                            entire_instrs.append(jump_instr.replace('{LABEL}', label))
+                            # Append to output with labels
+                            # IMPORTANT: Use actual offset from compiled_seq instead of label reference
+                            # This ensures the .S file matches the machine codes executed by spike_engine
+                            # (riscv-as may generate different opcodes when using labels)
+                            if compiled_seq is not None and len(compiled_seq.asm_list) >= 1:
+                                # Use the actual jump instruction with offset (e.g., "jal a0, . + 28")
+                                entire_instrs.append(compiled_seq.asm_list[0])
+                            else:
+                                # Fallback to label-based instruction (may cause mismatch)
+                                entire_instrs.append(jump_instr.replace('{LABEL}', label))
                             entire_instrs.extend(middle_instrs)
                             entire_instrs.append(f'{label}:')
 
-                            # Skip i increment for the number of instructions added
-                            i += len(middle_instrs) + 1  # jump + middle
+                            # Update byte counts based on compiled machine code
+                            if compiled_seq is not None:
+                                seq_actual_bytes = sum(compiled_seq.sizes)
+                                if os.environ.get('DEBUG_BYTES', ''):
+                                    print(f"[Seed {seed_times}] Forward jump: sizes={compiled_seq.sizes}, total={seq_actual_bytes}")
+                            else:
+                                # Fallback: jump + middle instructions (assume 4 bytes each)
+                                seq_actual_bytes = (len(middle_instrs) + 1) * 4
+
+                            actual_bytes += seq_actual_bytes
+                            logical_instr_index += len(middle_instrs) + 1  # jump + middle
                             continue
 
                     elif is_indirect_jump:
                         # The last instruction cannot be a jump instruction because there are no subsequent labels.
-                        if i == instr_number - 1:
+                        if logical_instr_index == instr_number - 1:
+                            logical_instr_index += 1
                             continue
                         # === FORWARD INDIRECT JUMP ONLY ===
                         label = label_mgr.generate_forward_label()
@@ -506,31 +575,48 @@ def generate_instructions(instr_number: int,
                             is_rv32, instrs_filter, probabilities, allowed_ext.allowed_ext
                         )
 
-                        # If jump_compiler and spike_session are available, compile and execute
-                        if jump_compiler is not None and spike_session is not None:
+                        # Initialize compiled_seq for fallback estimation
+                        compiled_seq = None
+
+                        # If encoder and spike_session are available, compile and execute
+                        if encoder is not None and spike_session is not None:
                             try:
-                                ind_seq = jump_compiler.compile_indirect_jump(
+                                compiled_seq = encoder.compile_indirect_jump(
                                     f'la {chosen_reg}, {{LABEL}}',
                                     jump_instr_str,
                                     middle_instrs,
                                     label
                                 )
-                                codes_and_sizes = jump_compiler.get_machine_codes(ind_seq)
-                                if codes_and_sizes:
-                                    codes = [c for c, s in codes_and_sizes]
-                                    sizes = [s for c, s in codes_and_sizes]
-                                    spike_session.execute_jump_sequence(codes, sizes)
+                                spike_session.execute_sequence(compiled_seq.codes, compiled_seq.sizes)
                             except Exception as e:
                                 pass
 
                         # Append to output with labels
-                        entire_instrs.append(f'la {chosen_reg}, {label}')
+                        # IMPORTANT: Use actual auipc+addi from compiled_seq instead of 'la' pseudo-instruction
+                        # This ensures the .S file matches the machine codes executed by spike_engine
+                        # (riscv-as may generate different opcodes for 'la' pseudo-instruction)
+                        if compiled_seq is not None and len(compiled_seq.asm_list) >= 2:
+                            # Use the actual auipc and addi instructions from compilation
+                            entire_instrs.append(compiled_seq.asm_list[0])  # auipc
+                            entire_instrs.append(compiled_seq.asm_list[1])  # addi
+                        else:
+                            # Fallback to la pseudo-instruction (may cause mismatch)
+                            entire_instrs.append(f'la {chosen_reg}, {label}')
                         entire_instrs.append(jump_instr_str)
                         entire_instrs.extend(middle_instrs)
                         entire_instrs.append(f'{label}:')
 
-                        # Skip i increment
-                        i += len(middle_instrs) + 2  # la + jump + middle
+                        # Update byte counts based on compiled machine code
+                        if compiled_seq is not None:
+                            seq_actual_bytes = sum(compiled_seq.sizes)
+                            if os.environ.get('DEBUG_BYTES', ''):
+                                print(f"[Seed {seed_times}] Indirect jump: sizes={compiled_seq.sizes}, total={seq_actual_bytes}")
+                        else:
+                            # Fallback: la(2×4) + jump(4) + middle (assume 4 bytes each)
+                            seq_actual_bytes = (len(middle_instrs) + 3) * 4
+
+                        actual_bytes += seq_actual_bytes
+                        logical_instr_index += len(middle_instrs) + 2  # la + jump + middle (la counts as 1 logical)
                         continue
 
 
@@ -541,6 +627,7 @@ def generate_instructions(instr_number: int,
                         # Use checkpoint-based validation with decoupled XOR and bug filtering
                         if validator is not None:
                             mutate_time = 0
+                            instr_actual_bytes = 4  # Default for single 4-byte instruction
                             while mutate_time < MAX_MUTATE_TIME:
                                 # Generate new instruction
                                 if is_rv32:
@@ -554,7 +641,10 @@ def generate_instructions(instr_number: int,
                                                                     frd_history, frs_history)
 
                                 # Validate instruction (auto-confirms if valid, auto-rejects if not)
-                                if validator.validate_instruction(complete_instr):
+                                # Returns (is_valid, actual_bytes) where actual_bytes
+                                # reflects pseudo-instruction expansion in bytes
+                                is_valid, instr_actual_bytes = validator.validate_instruction(complete_instr)
+                                if is_valid:
                                     break
                                 mutate_time += 1
 
@@ -562,9 +652,12 @@ def generate_instructions(instr_number: int,
                             if mutate_time >= MAX_MUTATE_TIME:
                                 resolve_duplicates_fail += 1
                                 # Skip this instruction since validation failed
+                                logical_instr_index += 1
                                 continue
                             else:
                                 resolve_duplicates += 1
+                                # Update actual bytes with the bytes from validator
+                                actual_bytes += instr_actual_bytes
 
                         else:
                             # Validator not available - spike_engine is required for duplicate elimination
@@ -601,12 +694,45 @@ def generate_instructions(instr_number: int,
 
                             # Instruction is valid, exit retry loop
                             break
+                        # In non-eliminate mode, assume each logical instruction = 4 bytes
+                        # (pseudo-instruction expansion is not tracked without spike validation)
+                        actual_bytes += 4
                 except IndexError as e:
                     complete_instr = 'nop'
+                    actual_bytes += 4  # nop is 4 bytes
                     pass
 
             entire_instrs.append(complete_instr)
-    
+            logical_instr_index += 1
+
+        # Pad with NOPs to match the NOP template layout
+        # This ensures the assembly file compiles to the same memory layout as the spike template
+        # max_bytes = (instr_number + NOP_REDUNDANCY) * 4 (each nop is 4 bytes)
+        padding_bytes = max_bytes - actual_bytes
+
+        # Debug output for byte tracking verification
+        if os.environ.get('DEBUG_BYTES', ''):
+            print(f"[Seed {seed_times}] DEBUG: max_bytes={max_bytes}, actual_bytes={actual_bytes}, "
+                  f"padding_bytes={padding_bytes}, logical_instr_index={logical_instr_index}")
+
+        if padding_bytes > 0:
+            # Calculate number of 4-byte NOPs needed
+            nop_count = padding_bytes // 4
+            remaining_bytes = padding_bytes % 4
+
+            # If there are remaining bytes, it indicates a byte tracking error
+            # Round up to ensure we don't exceed the NOP template boundary
+            if remaining_bytes != 0:
+                # Add one extra nop to cover the remaining bytes
+                # This ensures alignment but may slightly exceed the template
+                # Better to be safe than to have misaligned code
+                nop_count += 1
+                print(f"[Seed {seed_times}] Warning: actual_bytes={actual_bytes} not aligned to 4 bytes "
+                      f"(remaining={remaining_bytes}), adding extra nop for safety")
+
+            for _ in range(nop_count):
+                entire_instrs.append('nop')
+
         write_instructions_to_file(new_filename, list2str(entire_instrs), template)
 
         # Cleanup Spike session
@@ -615,12 +741,27 @@ def generate_instructions(instr_number: int,
 
         # Disable debug output
         InstructionValidator.disable_debug_output()
+        InstructionValidator.disable_detailed_debug()
 
         # TODO: Count how many identical cases have been eliminated
         # print("resolve_duplicates:",resolve_duplicates,"\nresolve_duplicates_fail:",resolve_duplicates_fail)
         return resolve_duplicates, resolve_duplicates_fail
 
     finally:
+        # Clean up XOR cache (release shared memory)
+        if xor_cache is not None:
+            try:
+                xor_cache.close()
+            except Exception:
+                pass
+
+        # Clean up Spike session
+        if spike_session is not None:
+            try:
+                spike_session.close()
+            except Exception:
+                pass
+
         # Clean up temporary files in /dev/shm
         temp_file_manager.cleanup_all_temp_files()
 

@@ -21,24 +21,29 @@ class Filter:
     def set_architecture(self, architecture: str) -> None:
         self.registry = get_known_bugs(architecture)
 
-    def filter_known_bug(self, instr_op: str, dest_values: List[int], source_values: List[int]) -> Optional[str]:
+    def filter_known_bug(self, instr_op: str, source_values: List[int]) -> Optional[str]:
         """
-        Check if an instruction triggers a known bug based on register values
+        Check if an instruction triggers a known bug based on source register values
 
-        Matches actual register VALUES (not indices) against bug patterns.
-        Pattern format: (dest_pattern, source_pattern1, source_pattern2, ...)
+        Matches source register VALUES against bug patterns.
+        Pattern format: (source_pattern1, source_pattern2, ...)
+
+        This check is performed BEFORE instruction execution, using only source
+        register values to filter out instructions that would trigger known bugs.
 
         Args:
-            instr_op: Instruction opcode (e.g., "sc.w", "csrrw")
-            dest_values: Destination register VALUES after execution (usually 1 element)
+            instr_op: Instruction opcode (e.g., "div", "sc.w", "csrrw")
             source_values: Source register VALUES before execution
 
         Returns:
             Bug name if instruction matches a known bug pattern, None otherwise
+
+        Example:
+            # Filter division by zero: div rd, rs1, rs2 where rs2=0
+            add_bug(reg, 'div', 'div by zero', '*', '0')
+            # source_values = [rs1_value, rs2_value]
+            # Pattern matches if rs2_value == 0
         """
-        # Combine dest and source values for pattern matching
-        # Pattern format: (dest1, dest2, ..., src1, src2, ...)
-        all_values = dest_values + source_values
-        return match_bug(self.registry, instr_op, all_values)
+        return match_bug(self.registry, instr_op, source_values)
 
 bug_filter = Filter()
