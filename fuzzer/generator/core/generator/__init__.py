@@ -28,7 +28,8 @@ def generate_instructions_parallel(instr_number: int,
                                    arch: ArchConfig,
                                    template_type: str,
                                    out_dir: str = "out-seeds-2025-test",
-                                   architecture: str = 'xs'):
+                                   architecture: str = 'xs',
+                                   debug_config: dict = None):
     """
     Generate random RISC-V instructions in parallel across multiple processes.
 
@@ -46,6 +47,13 @@ def generate_instructions_parallel(instr_number: int,
         template_type: Template type name
         out_dir: Output directory for seeds and XOR cache
         architecture: Architecture for bug filtering ('xs', 'nts', 'rkt', 'kmh')
+        debug_config: Debug configuration dict with keys:
+            - enabled: bool - Enable debug mode
+            - output_dir: str - Debug output directory
+            - mode: str - 'FULL', 'DIFF', or 'SUMMARY'
+            - accepted_only: bool - Only log ACCEPTED instructions
+            - log_csr: bool - Log CSR values
+            - log_fpr: bool - Log FPR values
     """
     resolve_duplicates = 0
     resolve_duplicates_fail = 0
@@ -105,7 +113,8 @@ def generate_instructions_parallel(instr_number: int,
                         template_type,
                         out_dir,
                         shared_xor_cache,  # Pass shared cache to each process
-                        architecture  # Pass architecture for bug_filter initialization in subprocess
+                        architecture,  # Pass architecture for bug_filter initialization in subprocess
+                        debug_config  # Pass debug configuration
                     )
                     futures[future] = seed_idx
 

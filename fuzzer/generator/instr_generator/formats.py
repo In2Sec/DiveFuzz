@@ -921,8 +921,9 @@ INSTRUCTION_FORMATS = {
         }
     },
     "RV_F_ZFINX": {# define mode
+        # Instructions with ", dyn" suffix use dynamic rounding mode (rm=7)
         "fmadd.s": {
-            "format": "fmadd.s {FRD}, {FRS1}, {FRS2}, {FRS3}",
+            "format": "fmadd.s {FRD}, {FRS1}, {FRS2}, {FRS3}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -932,7 +933,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fmsub.s": {
-            "format": "fmsub.s {FRD}, {FRS1}, {FRS2}, {FRS3}",
+            "format": "fmsub.s {FRD}, {FRS1}, {FRS2}, {FRS3}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -942,7 +943,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fnmadd.s": {
-            "format": "fnmadd.s {FRD}, {FRS1}, {FRS2}, {FRS3}",
+            "format": "fnmadd.s {FRD}, {FRS1}, {FRS2}, {FRS3}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -952,7 +953,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fnmsub.s": {
-            "format": "fnmsub.s {FRD}, {FRS1}, {FRS2}, {FRS3}",
+            "format": "fnmsub.s {FRD}, {FRS1}, {FRS2}, {FRS3}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -962,7 +963,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fadd.s": {
-            "format": "fadd.s {FRD}, {FRS1}, {FRS2}",
+            "format": "fadd.s {FRD}, {FRS1}, {FRS2}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -971,7 +972,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fsub.s": {
-            "format": "fsub.s {FRD}, {FRS1}, {FRS2}",
+            "format": "fsub.s {FRD}, {FRS1}, {FRS2}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -980,7 +981,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fmul.s": {
-            "format": "fmul.s {FRD}, {FRS1}, {FRS2}",
+            "format": "fmul.s {FRD}, {FRS1}, {FRS2}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -989,7 +990,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fdiv.s": {
-            "format": "fdiv.s {FRD}, {FRS1}, {FRS2}",
+            "format": "fdiv.s {FRD}, {FRS1}, {FRS2}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -998,7 +999,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fsqrt.s": {
-            "format": "fsqrt.s {FRD}, {FRS1}",
+            "format": "fsqrt.s {FRD}, {FRS1}, dyn",
             "variables": [
                 "FRD",
                 "FRS1"
@@ -1051,7 +1052,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.w.s": {
-            "format": "fcvt.w.s {RD}, {FRS1}",
+            "format": "fcvt.w.s {RD}, {FRS1}, dyn",
             "variables": [
                 "RD",
                 "FRS1"
@@ -1059,7 +1060,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.wu.s": {
-            "format": "fcvt.wu.s {RD}, {FRS1}",
+            "format": "fcvt.wu.s {RD}, {FRS1}, dyn",
             "variables": [
                 "RD",
                 "FRS1"
@@ -1110,7 +1111,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.s.w": {
-            "format": "fcvt.s.w {FRD}, {RS1}",
+            "format": "fcvt.s.w {FRD}, {RS1}, dyn",
             "variables": [
                 "FRD",
                 "RS1"
@@ -1118,7 +1119,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.s.wu": {
-            "format": "fcvt.s.wu {FRD}, {RS1}",
+            "format": "fcvt.s.wu {FRD}, {RS1}, dyn",
             "variables": [
                 "FRD",
                 "RS1"
@@ -1156,7 +1157,7 @@ INSTRUCTION_FORMATS = {
     },
     "RV_D": {
         "fmadd.d": {
-            "format": "fmadd.d {FRD}, {FRS1}, {FRS2}, {FRS3}",
+            "format": "fmadd.d {FRD}, {FRS1}, {FRS2}, {FRS3}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -1166,7 +1167,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fmsub.d": {
-            "format": "fmsub.d {FRD}, {FRS1}, {FRS2}, {FRS3}",
+            "format": "fmsub.d {FRD}, {FRS1}, {FRS2}, {FRS3}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -1176,7 +1177,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fnmadd.d": {
-            "format": "fnmadd.d {FRD}, {FRS1}, {FRS2}, {FRS3}",
+            "format": "fnmadd.d {FRD}, {FRS1}, {FRS2}, {FRS3}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -1186,7 +1187,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fnmsub.d": {
-            "format": "fnmsub.d {FRD}, {FRS1}, {FRS2}, {FRS3}",
+            "format": "fnmsub.d {FRD}, {FRS1}, {FRS2}, {FRS3}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -1196,7 +1197,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fadd.d": {
-            "format": "fadd.d {FRD}, {FRS1}, {FRS2}",
+            "format": "fadd.d {FRD}, {FRS1}, {FRS2}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -1205,7 +1206,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fsub.d": {
-            "format": "fsub.d {FRD}, {FRS1}, {FRS2}",
+            "format": "fsub.d {FRD}, {FRS1}, {FRS2}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -1214,7 +1215,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fmul.d": {
-            "format": "fmul.d {FRD}, {FRS1}, {FRS2}",
+            "format": "fmul.d {FRD}, {FRS1}, {FRS2}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -1223,7 +1224,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fdiv.d": {
-            "format": "fdiv.d {FRD}, {FRS1}, {FRS2}",
+            "format": "fdiv.d {FRD}, {FRS1}, {FRS2}, dyn",
             "variables": [
                 "FRD",
                 "FRS1",
@@ -1232,7 +1233,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fsqrt.d": {
-            "format": "fsqrt.d {FRD}, {FRS1}",
+            "format": "fsqrt.d {FRD}, {FRS1}, dyn",
             "variables": [
                 "FRD",
                 "FRS1"
@@ -1285,7 +1286,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.w.d": {
-            "format": "fcvt.w.d {RD}, {FRS1}",
+            "format": "fcvt.w.d {RD}, {FRS1}, dyn",
             "variables": [
                 "RD",
                 "FRS1"
@@ -1293,7 +1294,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.wu.d": {
-            "format": "fcvt.wu.d {RD}, {FRS1}",
+            "format": "fcvt.wu.d {RD}, {FRS1}, dyn",
             "variables": [
                 "RD",
                 "FRS1"
@@ -1352,7 +1353,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.s.d": {
-            "format": "fcvt.s.d {FRD}, {FRS1}",
+            "format": "fcvt.s.d {FRD}, {FRS1}, dyn",
             "variables": [
                 "FRD",
                 "FRS1"
@@ -1388,7 +1389,7 @@ INSTRUCTION_FORMATS = {
     },
     "RV64_F": {
         "fcvt.l.s": {
-            "format": "fcvt.l.s {RD}, {FRS1}",
+            "format": "fcvt.l.s {RD}, {FRS1}, dyn",
             "variables": [
                 "RD",
                 "FRS1"
@@ -1396,7 +1397,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.lu.s": {
-            "format": "fcvt.lu.s {RD}, {FRS1}",
+            "format": "fcvt.lu.s {RD}, {FRS1}, dyn",
             "variables": [
                 "RD",
                 "FRS1"
@@ -1404,7 +1405,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.s.l": {
-            "format": "fcvt.s.l {FRD}, {RS1}",
+            "format": "fcvt.s.l {FRD}, {RS1}, dyn",
             "variables": [
                 "FRD",
                 "RS1"
@@ -1412,7 +1413,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.s.lu": {
-            "format": "fcvt.s.lu {FRD}, {RS1}",
+            "format": "fcvt.s.lu {FRD}, {RS1}, dyn",
             "variables": [
                 "FRD",
                 "RS1"
@@ -1421,8 +1422,9 @@ INSTRUCTION_FORMATS = {
         }
     },
     "RV64_D": {
+        # NOTE: Instructions with ", dyn" suffix use dynamic rounding mode (rm=7)
         "fcvt.l.d": {
-            "format": "fcvt.l.d {RD}, {FRS1}",
+            "format": "fcvt.l.d {RD}, {FRS1}, dyn",
             "variables": [
                 "RD",
                 "FRS1"
@@ -1430,7 +1432,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.lu.d": {
-            "format": "fcvt.lu.d {RD}, {FRS1}",
+            "format": "fcvt.lu.d {RD}, {FRS1}, dyn",
             "variables": [
                 "RD",
                 "FRS1"
@@ -1446,7 +1448,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.d.l": {
-            "format": "fcvt.d.l {FRD}, {RS1}",
+            "format": "fcvt.d.l {FRD}, {RS1}, dyn",
             "variables": [
                 "FRD",
                 "RS1"
@@ -1454,7 +1456,7 @@ INSTRUCTION_FORMATS = {
             "category": "FLOAT"
         },
         "fcvt.d.lu": {
-            "format": "fcvt.d.lu {FRD}, {RS1}",
+            "format": "fcvt.d.lu {FRD}, {RS1}, dyn",
             "variables": [
                 "FRD",
                 "RS1"
@@ -1786,7 +1788,7 @@ INSTRUCTION_FORMATS = {
         "c.fsdsp": {
             "format": "c.fsdsp {FRS2}, {UIMM_9_8}({SP})",
             "variables": [
-                "SP"
+                "SP",
                 "UIMM_9_8",
                 "FRS2"
             ],
@@ -1944,202 +1946,453 @@ INSTRUCTION_FORMATS = {
         }
     },
     "RV_A": {
+        # NOTE: .aq = acquire, .rl = release, .aqrl = acquire-release memory ordering
+        # LR/SC instructions
         "lr.w": {
             "format": "lr.w {RD}, ({T6})",
-            "variables": [
-                "RD",
-                "T6"
-            ],
+            "variables": ["RD", "T6"],
+            "category": "AMO_LOAD"
+        },
+        "lr.w.aq": {
+            "format": "lr.w.aq {RD}, ({T6})",
+            "variables": ["RD", "T6"],
+            "category": "AMO_LOAD"
+        },
+        "lr.w.rl": {
+            "format": "lr.w.rl {RD}, ({T6})",
+            "variables": ["RD", "T6"],
+            "category": "AMO_LOAD"
+        },
+        "lr.w.aqrl": {
+            "format": "lr.w.aqrl {RD}, ({T6})",
+            "variables": ["RD", "T6"],
             "category": "AMO_LOAD"
         },
         "sc.w": {
             "format": "sc.w {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO_STORE"
         },
+        "sc.w.aq": {
+            "format": "sc.w.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO_STORE"
+        },
+        "sc.w.rl": {
+            "format": "sc.w.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO_STORE"
+        },
+        "sc.w.aqrl": {
+            "format": "sc.w.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO_STORE"
+        },
+        # AMO instructions with all ordering variants
+        # TODO: This can be further optimized
         "amoswap.w": {
             "format": "amoswap.w {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoswap.w.aq": {
+            "format": "amoswap.w.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoswap.w.rl": {
+            "format": "amoswap.w.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoswap.w.aqrl": {
+            "format": "amoswap.w.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amoadd.w": {
             "format": "amoadd.w {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoadd.w.aq": {
+            "format": "amoadd.w.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoadd.w.rl": {
+            "format": "amoadd.w.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoadd.w.aqrl": {
+            "format": "amoadd.w.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amoxor.w": {
             "format": "amoxor.w {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoxor.w.aq": {
+            "format": "amoxor.w.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoxor.w.rl": {
+            "format": "amoxor.w.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoxor.w.aqrl": {
+            "format": "amoxor.w.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amoand.w": {
             "format": "amoand.w {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoand.w.aq": {
+            "format": "amoand.w.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoand.w.rl": {
+            "format": "amoand.w.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoand.w.aqrl": {
+            "format": "amoand.w.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amoor.w": {
             "format": "amoor.w {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoor.w.aq": {
+            "format": "amoor.w.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoor.w.rl": {
+            "format": "amoor.w.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoor.w.aqrl": {
+            "format": "amoor.w.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amomin.w": {
             "format": "amomin.w {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomin.w.aq": {
+            "format": "amomin.w.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomin.w.rl": {
+            "format": "amomin.w.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomin.w.aqrl": {
+            "format": "amomin.w.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amomax.w": {
             "format": "amomax.w {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomax.w.aq": {
+            "format": "amomax.w.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomax.w.rl": {
+            "format": "amomax.w.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomax.w.aqrl": {
+            "format": "amomax.w.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amominu.w": {
             "format": "amominu.w {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amominu.w.aq": {
+            "format": "amominu.w.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amominu.w.rl": {
+            "format": "amominu.w.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amominu.w.aqrl": {
+            "format": "amominu.w.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amomaxu.w": {
             "format": "amomaxu.w {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomaxu.w.aq": {
+            "format": "amomaxu.w.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomaxu.w.rl": {
+            "format": "amomaxu.w.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomaxu.w.aqrl": {
+            "format": "amomaxu.w.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         }
     },
     "RV64_A": {
+        # NOTE: .aq = acquire, .rl = release, .aqrl = acquire-release memory ordering
+        # LR/SC instructions
         "lr.d": {
             "format": "lr.d {RD}, ({T6})",
-            "variables": [
-                "RD",
-                "T6"
-            ],
+            "variables": ["RD", "T6"],
+            "category": "AMO_LOAD"
+        },
+        "lr.d.aq": {
+            "format": "lr.d.aq {RD}, ({T6})",
+            "variables": ["RD", "T6"],
+            "category": "AMO_LOAD"
+        },
+        "lr.d.rl": {
+            "format": "lr.d.rl {RD}, ({T6})",
+            "variables": ["RD", "T6"],
+            "category": "AMO_LOAD"
+        },
+        "lr.d.aqrl": {
+            "format": "lr.d.aqrl {RD}, ({T6})",
+            "variables": ["RD", "T6"],
             "category": "AMO_LOAD"
         },
         "sc.d": {
             "format": "sc.d {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO_STORE"
         },
+        "sc.d.aq": {
+            "format": "sc.d.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO_STORE"
+        },
+        "sc.d.rl": {
+            "format": "sc.d.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO_STORE"
+        },
+        "sc.d.aqrl": {
+            "format": "sc.d.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO_STORE"
+        },
+        # AMO instructions with all ordering variants
         "amoswap.d": {
             "format": "amoswap.d {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoswap.d.aq": {
+            "format": "amoswap.d.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoswap.d.rl": {
+            "format": "amoswap.d.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoswap.d.aqrl": {
+            "format": "amoswap.d.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amoadd.d": {
             "format": "amoadd.d {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoadd.d.aq": {
+            "format": "amoadd.d.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoadd.d.rl": {
+            "format": "amoadd.d.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoadd.d.aqrl": {
+            "format": "amoadd.d.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amoxor.d": {
             "format": "amoxor.d {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoxor.d.aq": {
+            "format": "amoxor.d.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoxor.d.rl": {
+            "format": "amoxor.d.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoxor.d.aqrl": {
+            "format": "amoxor.d.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amoand.d": {
             "format": "amoand.d {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoand.d.aq": {
+            "format": "amoand.d.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoand.d.rl": {
+            "format": "amoand.d.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoand.d.aqrl": {
+            "format": "amoand.d.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amoor.d": {
             "format": "amoor.d {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoor.d.aq": {
+            "format": "amoor.d.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoor.d.rl": {
+            "format": "amoor.d.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amoor.d.aqrl": {
+            "format": "amoor.d.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amomin.d": {
             "format": "amomin.d {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomin.d.aq": {
+            "format": "amomin.d.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomin.d.rl": {
+            "format": "amomin.d.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomin.d.aqrl": {
+            "format": "amomin.d.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amomax.d": {
             "format": "amomax.d {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomax.d.aq": {
+            "format": "amomax.d.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomax.d.rl": {
+            "format": "amomax.d.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomax.d.aqrl": {
+            "format": "amomax.d.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amominu.d": {
             "format": "amominu.d {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amominu.d.aq": {
+            "format": "amominu.d.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amominu.d.rl": {
+            "format": "amominu.d.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amominu.d.aqrl": {
+            "format": "amominu.d.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         },
         "amomaxu.d": {
             "format": "amomaxu.d {RD}, {RS2}, ({T6})",
-            "variables": [
-                "RD",
-                "T6",
-                "RS2"
-            ],
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomaxu.d.aq": {
+            "format": "amomaxu.d.aq {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomaxu.d.rl": {
+            "format": "amomaxu.d.rl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
+            "category": "AMO"
+        },
+        "amomaxu.d.aqrl": {
+            "format": "amomaxu.d.aqrl {RD}, {RS2}, ({T6})",
+            "variables": ["RD", "T6", "RS2"],
             "category": "AMO"
         }
     },

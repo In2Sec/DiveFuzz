@@ -17,26 +17,20 @@
 # You can adjust the frequency of any instruction extension you want to test.
 
 # ========= 1) CVA6 =========
+# CVA6 Config: RV64GC + B (Zba/Zbb/Zbs/Zbc) + ZKN (crypto)
+# NOTE: Must match ALLOWED_EXT_CVA6 exactly to avoid probability calculation errors
 SPECIAL_PROB_CVA6 = {
-    'RV_ZICSR': 0.0423, 'rv_zifencei': 0.0042, 'RV_I': 0.1652, \
-    'RV64_I': 0.0635, 'RV_F_ZFINX': 0.1016, 'RV_F': 0.0084, 'RV_D': 0.1101, \
-    'RV64_F': 0.0209, 'RV64_D': 0.0254, \
-    #'RV_C': 0.0974, 'RV64_C': 0.0423,\
-    'RV_C': 0.0974, 'RV64_C': 0.0423,\
-    #'RV32_C_F': 0.0169, \
-    'RV32_C_F': 0, \
-    #'RV_C_D': 0.0169, \
-    'RV_C_D': 0, \
-    #'RV32_C': 0.0042, \
-    'RV32_C': 0, \
-    'RV_M': 0.0296,\
-    'RV32_ZPN': 0.0042, 'RV64_M': 0.0211, \
-    #'RV_A': 0.0476, 'RV64_A': 0.0466, \
-    'RV_A': 0.0476, 'RV64_A': 0.0466, \
-    #'RV_ZBKB': 0.0296, 'RV64_ZBKB': 0.0211, 'RV_ZBKC': 0.0084, 'RV_ZBKX': 0.0084, \
-    'RV_ZBKB': 0.0796, 'RV64_ZBKB': 0.0811, 'RV_ZBKC': 0.0284, 'RV_ZBKX': 0.0384, \
-    'RV64_ZK': 0.0466, 'RV_ZK': 0.0169
-    #'ILL':0.0006
+    'RV_ZICSR': 0.0423, 'rv_zifencei': 0.0042, 'RV_I': 0.1652,
+    'RV64_I': 0.0635, 'RV_F': 0.0084, 'RV_D': 0.1101,
+    'RV64_F': 0.0209, 'RV64_D': 0.0254,
+    'RV_C': 0.0974, 'RV_C_D': 0.0169, 'RV32_C': 0.0042,
+    'RV_M': 0.0296, 'RV32_ZPN': 0.0042, 'RV64_M': 0.0211,
+    'RV_A': 0.0476, 'RV64_A': 0.0466,
+    'RV_ZBKB': 0.0796, 'RV64_ZBKB': 0.0811, 'RV_ZBKC': 0.0284, 'RV_ZBKX': 0.0384,
+    'RV64_ZK': 0.0466, 'RV_ZK': 0.0169,
+    'ROCC': 0.0042
+    # NOTE: RV_F_ZFINX excluded (conflicts with F/D extensions)
+    # NOTE: RV64_C and RV32_C_F not in ALLOWED_EXT_CVA6
 }
 
 # ========= 2) CVA6_CASCADE =========

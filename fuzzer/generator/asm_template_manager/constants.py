@@ -19,14 +19,16 @@ from enum import Enum, auto
 class TemplateType(Enum):
     """Enumeration of supported template types."""
     # XiangShan templates
-    XIANGSHAN = 'xiangshan'   # xiangshan - M/S/VS/U... mode 
-
+    XIANGSHAN = 'xiangshan'   # xiangshan - M/S/VX/U... mode
 
     # NutShell templates
     NUTSHELL = 'nutshell'     # nutshell - Machine mode with mtvec handler
 
-    # TestXS templates
-    ROCKET = 'rocket'         
+    # Rocket templates
+    ROCKET = 'rocket'
+
+    # CVA6 templates
+    CVA6 = 'cva6'             # CVA6 - RV64GC with B/ZKN, no Zfh
 
     # TESTXS_U_MODE = 'testxs_u_mode'         # testxs/u_mode.S - User mode with complex page tables
 

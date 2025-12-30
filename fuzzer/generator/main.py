@@ -11,6 +11,7 @@
 # 
 # See the Mulan PSL v2 for more details.
 
+import os
 import time
 import logging
 from .config.cli_parser import parse_args
@@ -19,6 +20,18 @@ from .core.generator import generate_instructions_parallel
 from .core.mutator import mutate_instructions_parallel
 
 logger = logging.getLogger(__name__)
+
+
+def write_isa_info(out_dir: str, isa: str, arch_bits: int):
+    """
+    Write ISA information to a file for downstream tools (e.g., spike runner).
+
+    This ensures consistency between the generator and spike execution.
+    """
+    isa_file = os.path.join(out_dir, ".isa_info")
+    with open(isa_file, 'w') as f:
+        f.write(f"ISA={isa}\n")
+        f.write(f"ARCH_BITS={arch_bits}\n")
 
 # When processing a large number of files and performing compute-intensive operations 
 # on the file contents (such as instruction counting, probability calculation, etc.), 
@@ -38,6 +51,21 @@ def main():
     config = setup_config(args)
 
     if config.generate_enable:
+        # Build debug configuration if debug mode is enabled
+        debug_config = None
+        if config.debug_enabled:
+            debug_config = {
+                'enabled': True,
+                'output_dir': str(config.out_dir),
+                'mode': config.debug_mode,
+                'accepted_only': config.debug_accepted_only,
+                'log_csr': config.debug_log_csr,
+                'log_fpr': config.debug_log_fpr,
+            }
+            filter_str = "ACCEPTED only" if config.debug_accepted_only else "ALL"
+            print(f"# Debug mode enabled: mode={config.debug_mode}, filter={filter_str}")
+            print(f"#   Output: {config.out_dir}/spike_debug_seed_*.log")
+
         generate_instructions_parallel(
             config.instr_number,
             config.seed_times,
@@ -48,8 +76,12 @@ def main():
             config.arch,
             config.template_type,
             str(config.out_dir),
-            config.architecture
+            config.architecture,
+            debug_config
         )
+
+        # Write ISA info for downstream tools (e.g., spike runner)
+        write_isa_info(str(config.out_dir), config.isa, config.arch_bits)
 
     # Whether to enable out-of-order mutation, considering previously unseen extension instructions
     if config.mutation_enable:

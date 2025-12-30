@@ -34,6 +34,11 @@ except ImportError:
     from reg_analyzer.elf_compiler import generate_elf
 
 
+# Extra NOPs to reserve space for instruction expansion during generation
+# This is a module-level constant for easy access from other modules
+NOP_REDUNDANCY = 16
+
+
 class NopTemplateGenerator:
     """
     Generate ELF templates with N nop instructions
@@ -43,6 +48,9 @@ class NopTemplateGenerator:
     2. Compile to ELF using riscv-gnu-toolchain
     3. Return ELF path for spike_engine initialization
     """
+
+    # Class-level reference to module constant
+    NOP_REDUNDANCY = NOP_REDUNDANCY
 
     def __init__(self, template: TemplateInstance):
         """
@@ -55,16 +63,22 @@ class NopTemplateGenerator:
 
     def generate_nop_payload(self, num_instrs: int) -> str:
         """
-        Generate instruction payload with N nop instructions
+        Generate instruction payload with N nop instructions plus redundancy
 
         Args:
             num_instrs: Number of nop instructions to generate
 
         Returns:
-            String containing N lines of "nop" instructions (with trailing newline)
+            String containing (N + NOP_REDUNDANCY) lines of "nop" instructions
+            (with trailing newline)
+
+        Note:
+            Extra NOPs are added to handle cases where generated instructions
+            may exceed the expected count due to multi-instruction expansions.
         """
+        total_nops = num_instrs + self.NOP_REDUNDANCY
         # Add trailing newline to ensure proper separation from footer
-        return '\n'.join(['  nop'] * num_instrs) + '\n'
+        return '\n'.join(['  nop'] * total_nops) + '\n'
 
     def generate_nop_elf(
         self,
@@ -93,8 +107,9 @@ class NopTemplateGenerator:
         complete_asm = self.template.get_complete_template(nop_payload)
 
         # Create temporary assembly file
+        # Include process ID to ensure uniqueness across parallel processes
         if output_path is None:
-            output_path = f"/dev/shm/template_{num_instrs}.elf"
+            output_path = f"/dev/shm/template_{num_instrs}_{os.getpid()}.elf"
 
         # Write assembly to temporary file
         asm_path = output_path.replace('.elf', '.S')

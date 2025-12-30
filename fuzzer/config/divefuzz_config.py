@@ -44,3 +44,10 @@ class DiveFuzzArgConfig:
 
     enable_ext: bool = False
     exclude_ext: List[str] = field(default_factory=list)
+
+    # Debug configuration (disabled by default for executor usage)
+    debug: bool = False
+    debug_mode: str = 'FULL'
+    debug_all: bool = False
+    debug_no_csr: bool = False
+    debug_no_fpr: bool = False

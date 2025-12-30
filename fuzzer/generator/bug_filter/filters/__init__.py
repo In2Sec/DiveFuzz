@@ -107,14 +107,20 @@ def _build_nts_bugs() -> Registry:
     filters_nts.register(reg)
     return reg
 
+def _build_cva6_bugs() -> Registry:
+    """Build CVA6-specific bug patterns (empty for now)."""
+    return _build_registry()
+
 def get_known_bugs(architecture: str) -> Registry:
     """
     Return known bug patterns for the corresponding architecture based on the input architecture name
-    architecture: str, supports 'xs', 'nts', 'rkt', 'kmh'
+    architecture: str, supports 'xs', 'nts', 'rkt', 'kmh', 'cva6'
     """
     if architecture == 'xs':
         return _build_xs_bugs()
     elif architecture == 'nts':
         return _build_nts_bugs()
+    elif architecture == 'cva6':
+        return _build_cva6_bugs()
     else:
         raise ValueError(f"Unknown architecture: {architecture}")

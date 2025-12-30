@@ -157,33 +157,20 @@ def process_content(file_path: str,
                         or 'STORE_SP' in get_instruction_format(instr_name).get('category', []):
                         updated_content.append(line)
                     else:
-                        # Use validator for instruction validation (similar to generate_instructions)
-                        is_diff_rs = 0
+                        # Use validator for instruction validation
+                        # validate_instruction handles XOR check, bug filter, and checkpoint management
+                        is_valid = False
                         mutate_time = 0
 
-                        while is_diff_rs == 0 and mutate_time < MAX_MUTATE_TIME:
+                        while not is_valid and mutate_time < MAX_MUTATE_TIME:
                             modified_instr = modify_instruction_inc(line, prob, get_instruction_type(instr_name))
 
-                            # Validate with checkpoint-based validator
-                            # NEW: validator returns (xor_value, dest_values, source_values)
-                            xor_value, dest_values, source_values = validator.validate_instruction(modified_instr)
-                            if xor_value is not None:
-                                # Unique XOR, check bug filter
-                                opcode = modified_instr.strip().split()[0] if modified_instr.strip() else "unknown"
-
-                                # Check for known bugs using actual register values
-                                bug_name = bug_filter.filter_known_bug(opcode, dest_values, source_values)
-                                if bug_name:
-                                    # Triggers known bug, restore and retry
-                                    spike_session.restore_checkpoint_and_reset()
-                                    mutate_time += 1
-                                else:
-                                    # Valid instruction, accept it
-                                    spike_session.confirm_instruction(xor_value, modified_instr, opcode=opcode)
-                                    updated_content.append(segment_label + modified_instr)
-                                    is_diff_rs = 1
+                            # Validate instruction (returns (is_valid, actual_bytes))
+                            # Internally handles: XOR uniqueness, bug filter, checkpoint restore/confirm
+                            is_valid, _ = validator.validate_instruction(modified_instr)
+                            if is_valid:
+                                updated_content.append(segment_label + modified_instr)
                             else:
-                                # Duplicate XOR, retry
                                 mutate_time += 1
 
                         if mutate_time >= MAX_MUTATE_TIME:

@@ -24,6 +24,36 @@ import random
 # Private Helper Functions (Internal Use Only)
 # ==============================================================================
 
+
+def _init_random_mem_region(p: AsmProgram, total_bytes: int = 8192, random_bytes: int = 1024) -> AsmProgram:
+    """
+    Initialize memory region with random data for fuzzing diversity.
+
+    Args:
+        p: AsmProgram to add data to
+        total_bytes: Total size of memory region (default 8192 = 8KB)
+        random_bytes: Number of bytes to randomize (default 1024 = 1KB)
+                     The rest will be zero-initialized for efficiency.
+
+    The random portion provides diversity for Load/Store operations,
+    while the zero portion keeps file size manageable.
+    """
+    # Generate random 32-bit words for the random portion
+    random_words = random_bytes // 4  # 4 bytes per word
+    for i in range(0, random_words, 8):
+        # Generate 8 words at a time for more compact output
+        batch_size = min(8, random_words - i)
+        words = [f"0x{random.getrandbits(32):08x}" for _ in range(batch_size)]
+        p.data_word(*words)
+
+    # Fill remaining with zeros
+    remaining_bytes = total_bytes - random_bytes
+    if remaining_bytes > 0:
+        p.data_zero(remaining_bytes)
+
+    return p
+
+
 # ------------------------------------------------------------------------------
 # XiangShan mode Private Functions
 # ------------------------------------------------------------------------------
@@ -76,12 +106,14 @@ def _xs_init(p: AsmProgram) -> AsmProgram:
     p.li("x26", f"0x{ms_val:016x}")
     p.csrw(CSR.MSTATUS, "x26", comment=f"MSTATUS (mode is {mpp})")
     # Build PMP (Physical Memory Protection) setup.
-    # TODO support more PMP config
+    # Use NAPOT mode to cover entire address space (including mem_region for AMO instructions)
+    # pmpaddr0 = ~0 (all 1s) with NAPOT mode covers the entire address space
+    # pmpcfg0 = 0x1f means: A=NAPOT(0b11), R=1, W=1, X=1
     if mpp != 3:
-        p.la("x16", LBL_MAIN)
-        p.csrw(0x3b0, "x16")
-        p.li("x16", 0xf)
-        p.csrw(0x3a0, "x16")
+        p.li("x16", -1)  # All 1s = 0xffffffffffffffff
+        p.csrw(0x3b0, "x16")  # pmpaddr0
+        p.li("x16", 0x1f)  # NAPOT + RWX
+        p.csrw(0x3a0, "x16")  # pmpcfg0
 
         p.instr("sfence.vma x0, x0")
 
@@ -94,6 +126,11 @@ def _xs_init(p: AsmProgram) -> AsmProgram:
 def _xs_init_reg(p: AsmProgram) -> AsmProgram:
     """
     [XiangShan/Rocket] init: Initialize floating-point and general-purpose registers.
+
+    This function initializes ALL registers to ensure deterministic behavior
+    across different simulators/processors for differential testing:
+    - x1-x31: General-purpose registers (x0 is hardwired to 0)
+    - f0-f31: Floating-point registers
     """
     p.label(LBL_INIT)
 
@@ -111,50 +148,65 @@ def _xs_init_reg(p: AsmProgram) -> AsmProgram:
 
     p.instr("fsrmi", str(rm))
 
-    # === General-purpose register initialization ===
-    for r in range(16):
-        
+    # === General-purpose and floating-point register initialization ===
+    # Initialize ALL x1-x31 and f0-f31 for deterministic testing
+    # Note: x0 is hardwired to 0, no need to initialize
+
+    # Phase 1: Initialize x1-x31 with random values
+    # We use a specific pattern to ensure all registers get initialized
+    for r in range(1, 16):
         rand_val = random.getrandbits(64)
         p.li(f"x{r}", f"0x{rand_val:016x}")
+
+    # Phase 2: Initialize f0-f31 using the initialized x registers
+    # Use x5 (t0) as temp since it's already initialized
+    for r in range(12):
+        rand_val = random.getrandbits(64)
+        p.li("x5", f"0x{rand_val:016x}")  # Use t0 as temp register
         # choose a random fmv instruction: h.x / w.x / d.x
         op = random.choice(["fmv.h.x", "fmv.w.x", "fmv.d.x"])
-
-        # write to floating-point register f0 ~ f15
-        p.instr(op, f"f{r}", f"x{r}")
+        p.instr(op, f"f{r}", "x5")
 
     # To Store/Load - use valid memory region address
+    # Point t6 to the MIDDLE of mem_region (offset by 4096 bytes = half of 8KB)
+    # This allows both positive and negative offsets to access valid memory
     p.la("t6", SYM_MEM_REGION)
+    p.li("t5", "4096")
+    p.instr("add", "t6", "t6", "t5")
 
     p.instr("j", LBL_MAIN)
 
     p.align(12)
     return p
 
- 
 
 def _nutshell_init_reg(p: AsmProgram) -> AsmProgram:
     """
-    [XiangShan/Rocket] init: Initialize floating-point and general-purpose registers.
+    [NutShell M-mode] init: Initialize general-purpose registers.
+
+    NutShell typically runs in M-mode without floating-point extensions,
+    so only GPRs are initialized here. All x1-x31 are initialized to
+    ensure deterministic behavior across different environments.
     """
     p.label(LBL_INIT)
 
-    
-
     # === General-purpose register initialization ===
-    for r in range(16):
-
+    # Initialize ALL x1-x31 (x0 is hardwired to 0)
+    for r in range(1, 32):
         rand_val = random.getrandbits(64)
         p.li(f"x{r}", f"0x{rand_val:016x}")
 
-
     # To Store/Load - use valid memory region address
+    # Point t6 to the MIDDLE of mem_region (offset by 4096 bytes = half of 8KB)
+    # This allows both positive and negative offsets to access valid memory
     p.la("t6", SYM_MEM_REGION)
+    p.li("t5", "4096")
+    p.instr("add", "t6", "t6", "t5")
 
     p.instr("j", LBL_MAIN)
 
     p.align(12)
     return p
-
 
 
 def _exception_vector(p: AsmProgram) -> AsmProgram:
@@ -205,7 +257,7 @@ def _init_data_sections(p: AsmProgram) -> AsmProgram:
     p.section(".mem_region", flags="aw", sect_type="@progbits")
     p.align(4)
     p.label(SYM_MEM_REGION)
-    p.data_space(8192)
+    _init_random_mem_region(p)  # Initialize with random data for fuzzing diversity
     p.label(SYM_MEM_REGION_END)
 
     return p
@@ -303,12 +355,13 @@ def _s_mode_text_startup(p: AsmProgram) -> AsmProgram:
 def _s_mode_pmp_setup(p: AsmProgram) -> AsmProgram:
     """
     [S-mode] Build PMP (Physical Memory Protection) setup.
+    Use NAPOT mode to cover entire address space (including mem_region for AMO instructions).
     """
     p.label(LBL_PMP_SETUP)
-    p.la("x16", LBL_MAIN)
-    p.csrw(0x3b0, "x16")
-    p.li("x16", 0xf)
-    p.csrw(0x3a0, "x16")
+    p.li("x16", -1)  # All 1s = 0xffffffffffffffff
+    p.csrw(0x3b0, "x16")  # pmpaddr0
+    p.li("x16", 0x1f)  # NAPOT + RWX
+    p.csrw(0x3a0, "x16")  # pmpcfg0
     p.instr("sfence.vma")
     return p
 
@@ -354,87 +407,35 @@ def _s_mode_supervisor_init(p: AsmProgram) -> AsmProgram:
 def _s_mode_init_sequence(p: AsmProgram) -> AsmProgram:
     """
     [S-mode] Build init sequence with FP and GP register initialization.
+
+    All registers are initialized with random values for fuzzing diversity.
     """
     p.label(LBL_INIT)
 
-    # FP register initialization
-    p.li("x8", 2146959360);    p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 0);             p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f0", "x5")
-    p.li("x8", 33088);         p.instr("fmv.h.x", "f1", "x8")
-    p.li("x8", 490445);        p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 2820878163);    p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f2", "x5")
-    p.li("x8", 31744);         p.instr("fmv.h.x", "f3", "x8")
-    p.li("x8", 31743);         p.instr("fmv.h.x", "f4", "x8")
-    p.li("x8", 2146435072);    p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 1);             p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f5", "x5")
-    p.li("x8", 600638761);     p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 345061165);     p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f6", "x5")
-    p.li("x8", 2146435072);    p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 1);             p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f7", "x5")
-    p.li("x8", 192);           p.instr("fmv.h.x", "f8", "x8")
-    p.li("x8", 4293918719);    p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 4294967295);    p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f9", "x5")
-    p.li("x8", 64511);         p.instr("fmv.h.x", "f10", "x8")
-    p.li("x8", 2480559614);    p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 265978380);     p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f11", "x5")
-    p.li("x8", 835115);        p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 609019642);     p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f12", "x5")
-    p.li("x8", 0);             p.instr("fmv.w.x", "f13", "x8")
-    p.li("x8", 32256);         p.instr("fmv.h.x", "f14", "x8")
-    p.li("x8", 2139095040);    p.instr("fmv.w.x", "f15", "x8")
-    p.li("x8", 19);            p.instr("fmv.h.x", "f16", "x8")
-    p.li("x8", 2150974470);    p.instr("fmv.w.x", "f17", "x8")
-    p.li("x8", 1346398009);    p.instr("fmv.w.x", "f18", "x8")
-    p.li("x8", 2143289344);    p.instr("fmv.w.x", "f19", "x8")
-    p.li("x8", 31175);         p.instr("fmv.h.x", "f20", "x8")
-    p.li("x8", 2146435072);    p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 1);             p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f21", "x5")
-    p.li("x8", 2146435072);    p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 1);             p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f22", "x5")
-    p.li("x8", 32768);         p.instr("fmv.h.x", "f23", "x8")
-    p.li("x8", 31745);         p.instr("fmv.h.x", "f24", "x8")
-    p.li("x8", 4293918719);    p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 4294967295);    p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f25", "x5")
-    p.li("x8", 488043848);     p.instr("slli", "x8", "x8", "16"); p.instr("slli", "x8", "x8", "16")
-    p.li("x5", 60684771);      p.instr("or", "x5", "x5", "x8");   p.instr("fmv.d.x", "f26", "x5")
-    p.li("x8", 4286578688);    p.instr("fmv.w.x", "f27", "x8")
-    p.li("x8", 3427503);       p.instr("fmv.w.x", "f28", "x8")
-    p.li("x8", 2147658468);    p.instr("fmv.w.x", "f29", "x8")
-    p.li("x8", 31744);         p.instr("fmv.h.x", "f30", "x8")
-    p.li("x8", 2143289344);    p.instr("fmv.w.x", "f31", "x8")
-    p.instr("fsrmi", "3")
+    # Set random floating-point rounding mode
+    major_modes = [0, 1, 2, 3, 4]
+    minor_modes = [5, 6, 7]
+    if random.random() < 0.95:
+        rm = random.choice(major_modes)
+    else:
+        rm = random.choice(minor_modes)
+    p.instr("fsrmi", str(rm))
 
-    # GP register initialization
-    p.li("x0",  "0xf20eafaf")
-    p.li("x1",  "0xf1034be7")
-    p.li("x2",  "0x80000000")
-    p.li("x3",  "0x0")
-    p.li("x4",  "0xf12beb63")
-    p.li("x5",  "0xfc824cc8")
-    p.li("x6",  "0x18ca07fa")
-    p.li("x7",  "0xf")
-    p.li("x8",  "0x6c66da25")
-    p.li("x9",  "0x80000000")
-    p.li("x10", "0x15fa294")
-    p.li("x11", "0x6")
-    p.li("x12", "0xf")
-    p.li("x13", "0x0")
-    p.li("x14", "0xc")
-    p.li("x15", "0x80000000")
-    p.li("x16", "0x0")
-    p.li("x17", "0x0")
-    p.li("x18", "0x0")
-    p.li("x19", "0xf45ade45")
-    p.li("x20", "0x3")
-    p.li("x21", "0x0")
-    p.li("x22", "0x101a400d")
-    p.li("x23", "0x8225d371")
-    p.li("x24", "0x98b685c8")
-    p.li("x25", "0x0")
-    p.li("x26", "0x1b23092d")
-    p.li("x27", "0xffa21fa0")
-    p.li("x29", "0xf6f9a8f2")
-    p.comment("li x30, 0x80000000")
+    # === General-purpose register initialization with random values ===
+    # Initialize x1-x31 (x0 is hardwired to 0)
+    for r in range(1, 32):
+        rand_val = random.getrandbits(64)
+        p.li(f"x{r}", f"0x{rand_val:016x}")
+
+    # === Floating-point register initialization with random values ===
+    # Use x5 (t0) as temp register for loading values
+    for r in range(32):
+        rand_val = random.getrandbits(64)
+        p.li("x5", f"0x{rand_val:016x}")
+        op = random.choice(["fmv.h.x", "fmv.w.x", "fmv.d.x"])
+        p.instr(op, f"f{r}", "x5")
+
+    # Setup memory region pointer for Store/Load operations
     p.la("t6", SYM_MEM_REGION)
     p.li("t5", "4096")
     p.instr("add", "t6", "t6", "t5")
@@ -521,13 +522,16 @@ def _s_mode_data_sections(p: AsmProgram) -> AsmProgram:
     if p.arch.is_rv64(): p.data_dword(0)
     else:                p.data_word(0, 0)
 
+    # Allocate stack space for exception handling
+    # Stack grows downward, so we allocate space BEFORE the _end label
+    p.comment("Kernel stack space (512 bytes)")
+    p.data_zero(512)
     p.label(SYM_KERNEL_STACK_END)
-    p.data_8byte(0)
 
     p.section(".mem_region", flags="aw", sect_type="@progbits")
     p.align(4)
     p.label(SYM_MEM_REGION)
-    p.data_space(8192)
+    _init_random_mem_region(p)  # Initialize with random data for fuzzing diversity
     p.label(SYM_MEM_REGION_END)
 
     p.section(LBL_PAGE_TABLE_SEC, flags="aw", sect_type="@progbits")
@@ -585,12 +589,13 @@ def _u_mode_text_startup(p: AsmProgram) -> AsmProgram:
 def _u_mode_pmp_setup(p: AsmProgram) -> AsmProgram:
     """
     [U-mode] Build PMP setup.
+    Use NAPOT mode to cover entire address space (including mem_region for AMO instructions).
     """
     p.label(LBL_PMP_SETUP)
-    p.la("x29", LBL_MAIN)
-    p.csrw(0x3b0, "x29")
-    p.li("x29", 0xf)
-    p.csrw(0x3a0, "x29")
+    p.li("x29", -1)  # All 1s = 0xffffffffffffffff
+    p.csrw(0x3b0, "x29")  # pmpaddr0
+    p.li("x29", 0x1f)  # NAPOT + RWX
+    p.csrw(0x3a0, "x29")  # pmpcfg0
     return p
 
 
@@ -715,41 +720,27 @@ def _u_mode_user_init(p: AsmProgram) -> AsmProgram:
 def _u_mode_init_sequence(p: AsmProgram) -> AsmProgram:
     """
     [U-mode] Build init sequence (GP registers).
+
+    All registers are initialized with random values for fuzzing diversity.
+    IMPORTANT: x30 must NOT be randomized - it's the stack pointer for exception handling!
+    Note: x18 is set to user_stack_end at the end (required for U-mode operation).
     """
     p.label(LBL_INIT)
 
-    p.li("x0",  "0xdfdb6f3b")
-    p.li("x1",  "0x477b4a0f")
-    p.li("x2",  "0xfd07d5c1")
-    p.li("x3",  "0xf")
-    p.li("x4",  "0x80000000")
-    p.li("x5",  "0x0")
-    p.li("x6",  "0xfceb8383")
-    p.li("x7",  "0x75d8a2d8")
-    p.li("x8",  "0x854e10aa")
-    p.li("x9",  "0xf3acde09")
-    p.li("x10", "0x9846fbc6")
-    p.li("x11", "0xf042d4f4")
-    p.li("x12", "0x4")
-    p.li("x13", "0x0")
-    p.li("x14", "0x7ab5f05c")
-    p.li("x15", "0x80000000")
-    p.li("x16", "0x0")
-    p.li("x17", "0x0")
-    p.li("x19", "0xf27aac6c")
-    p.li("x20", "0xa2d87304")
-    p.li("x21", "0xfcad8706")
-    p.li("x22", "0x0")
-    p.li("x23", "0x0")
-    p.li("x24", "0x0")
-    p.li("x25", "0x80000000")
-    p.li("x26", "0x80585d40")
-    p.li("x27", "0x80000000")
-    p.li("x28", "0x49784ac")
-    p.li("x29", "0xf6472a6f")
-    p.li("x31", "0x0")
+    # === General-purpose register initialization with random values ===
+    # Initialize x1-x29 and x31 (x0 is hardwired to 0)
+    # SKIP x30: it's the stack pointer, must keep pointing to kernel_stack_end
+    for r in range(1, 30):
+        rand_val = random.getrandbits(64)
+        p.li(f"x{r}", f"0x{rand_val:016x}")
 
+    # x31 can be randomized (it will be overwritten by t6 later anyway)
+    rand_val = random.getrandbits(64)
+    p.li("x31", f"0x{rand_val:016x}")
+
+    # x18 must point to user stack for U-mode exception handling
     p.la("x18", SYM_USER_STACK_END)
+    # Setup memory region pointer for Store/Load operations
     p.la("t6", SYM_MEM_REGION)
     p.li("t5", "4096")
     p.instr("add", "t6", "t6", "t5")
@@ -905,16 +896,21 @@ def _u_mode_data_sections(p: AsmProgram) -> AsmProgram:
     if p.arch.is_rv64(): p.data_dword(0)
     else:                p.data_word(0, 0)
 
+    # Allocate stack space for exception handling
+    # Stack grows downward, so we allocate space BEFORE the _end label
+    # Exception handler saves 31 registers * 8 bytes = 248 bytes, plus some margin
+    p.comment("Kernel stack space (512 bytes)")
+    p.data_zero(512)
     p.label(SYM_KERNEL_STACK_END)
-    p.data_8byte(0)
 
+    p.comment("User stack space (512 bytes)")
+    p.data_zero(512)
     p.label(SYM_USER_STACK_END)
-    p.data_8byte(0)
 
     p.section(".mem_region", flags="aw", sect_type="@progbits")
     p.align(4)
     p.label(SYM_MEM_REGION)
-    p.data_space(8192)
+    _init_random_mem_region(p)  # Initialize with random data for fuzzing diversity
     p.label(SYM_MEM_REGION_END)
 
     p.label(LBL_KERNEL_INSTR_START)
@@ -960,6 +956,249 @@ def _u_mode_data_sections(p: AsmProgram) -> AsmProgram:
     p.label(LBL_PAGE_TABLE_6)
     for i in range(512):
         p.directive("dword", f"0x{0x600 + i:x}000cf")
+
+    return p
+
+
+# ------------------------------------------------------------------------------
+# CVA6 Private Functions (_cva6_*)
+# CVA6 Config: RV64GC + B + ZKN, NO Zfh/Zfhmin (no fmv.h.x)
+# ------------------------------------------------------------------------------
+
+def _cva6_text_startup(p: AsmProgram) -> AsmProgram:
+    """
+    [CVA6] Build the startup sequence in .text.init.
+    CVA6 uses standard RISC-V privilege architecture.
+
+    NOTE: We use .text.init instead of .text because CVA6's linker script
+    places .text.init at 0x80000000 first, then .text after alignment.
+    This ensures correct memory preloading in CVA6's Verilator testbench.
+    """
+    p.globl(LBL_START).section(".text.init")
+
+    p.label(LBL_START)
+
+    # CVA6 doesn't need MISA write (it's read-only in CVA6)
+    # Just setup trap vectors
+    p.label(LBL_TRAP_VEC_INIT)
+    p.la("x13", LBL_OTHER_EXP)
+    p.csrw(CSR.MTVEC, "x13", comment="MTVEC")
+    p.la("x13", LBL_OTHER_EXP_S)
+    p.csrw(CSR.STVEC, "x13", comment="STVEC")
+
+    p.label(LBL_MEPC_SETUP)
+    p.la("x13", LBL_INIT)
+    p.csrw(CSR.MEPC, "x13")
+
+    return p
+
+
+def _cva6_init(p: AsmProgram) -> AsmProgram:
+    """
+    [CVA6] Mode initialization:
+    - Write MSTATUS/MIE/PMP
+    - Enter init via mret
+
+    CVA6 supports M/S/U modes with SV39 MMU.
+    """
+    p.label(LBL_INIT_ENV)
+
+    # Generate random MSTATUS for CVA6 (RV64, no H extension)
+    ms_val = _random_mstatus_cva6()
+    mpp = (ms_val >> 11) & 0b11
+
+    # Load and write MSTATUS
+    p.li("x26", f"0x{ms_val:016x}")
+    p.csrw(CSR.MSTATUS, "x26", comment=f"MSTATUS (MPP={mpp})")
+
+    # PMP setup for non-M-mode execution
+    # CVA6 has 8 PMP entries
+    # Use NAPOT mode to cover entire address space (including mem_region for AMO instructions)
+    if mpp != 3:
+        p.li("x16", -1)  # All 1s = 0xffffffffffffffff
+        p.csrw(0x3b0, "x16")  # pmpaddr0
+        p.li("x16", 0x1f)  # NAPOT + RWX
+        p.csrw(0x3a0, "x16")  # pmpcfg0
+        p.instr("sfence.vma", "x0", "x0")
+
+    # Disable interrupts
+    p.li("x26", "0x0")
+    p.csrw(CSR.MIE, "x26", comment="MIE")
+    p.mret()
+
+    return p
+
+
+def _cva6_init_reg(p: AsmProgram) -> AsmProgram:
+    """
+    [CVA6] Initialize floating-point and general-purpose registers.
+
+    IMPORTANT: CVA6 does NOT support Zfh extension, so we only use:
+    - fmv.w.x (single precision, F extension)
+    - fmv.d.x (double precision, D extension)
+
+    NO fmv.h.x (half precision, Zfh extension)!
+
+    This function initializes ALL registers to ensure deterministic behavior:
+    - x1-x31: General-purpose registers (x0 is hardwired to 0)
+    - f0-f31: Floating-point registers
+    """
+    p.label(LBL_INIT)
+
+    # Set floating-point rounding mode
+    major_modes = [0, 1, 2, 3, 4]
+    minor_modes = [5, 6, 7]
+
+    if random.random() < 0.95:
+        rm = random.choice(major_modes)
+    else:
+        rm = random.choice(minor_modes)
+
+    p.instr("fsrmi", str(rm))
+
+    # === General-purpose and floating-point register initialization ===
+    # CVA6 only supports F and D extensions, NOT Zfh
+    # So we only use fmv.w.x (32-bit) and fmv.d.x (64-bit)
+
+    # Phase 1: Initialize ALL x1-x31 (x0 is hardwired to 0)
+    for r in range(1, 32):
+        rand_val = random.getrandbits(64)
+        p.li(f"x{r}", f"0x{rand_val:016x}")
+
+    # Phase 2: Initialize ALL f0-f31 using x5 (t0) as temp
+    for r in range(32):
+        rand_val = random.getrandbits(64)
+        p.li("x5", f"0x{rand_val:016x}")  # Use t0 as temp register
+        # CVA6: Only use fmv.w.x or fmv.d.x (NO fmv.h.x!)
+        op = random.choice(["fmv.w.x", "fmv.d.x"])
+        p.instr(op, f"f{r}", "x5")
+
+    # Setup memory region pointer for Store/Load operations
+    # Point t6 to the MIDDLE of mem_region (offset by 4096 bytes = half of 8KB)
+    # This allows both positive and negative offsets to access valid memory
+    p.la("t6", SYM_MEM_REGION)
+    p.li("t5", "4096")
+    p.instr("add", "t6", "t6", "t5")
+
+    p.instr("j", LBL_MAIN)
+
+    p.align(12)
+    return p
+
+
+def _random_mstatus_cva6():
+    """
+    Generate random MSTATUS value for CVA6.
+
+    CVA6 Config:
+    - RV64 (XLEN=64)
+    - No H extension (RVH=0)
+    - Supports M/S/U modes
+    - Has MMU (SV39)
+    """
+    val = 0
+
+    # SD(63) - derived by hardware, keep 0
+
+    # SXL[1:0] (35-34) & UXL[1:0] (33-32)
+    # For RV64: 2 means 64-bit
+    sxl = 2  # Always 64-bit for CVA6
+    uxl = 2
+    val |= (sxl << 34)
+    val |= (uxl << 32)
+
+    # TSR(22), TW(21), TVM(20), MXR(19), SUM(18), MPRV(17)
+    for bit in [22, 21, 20, 19, 18, 17]:
+        val |= (random.randint(0, 1) << bit)
+
+    # XS[1:0] (16-15), FS[1:0] (14-13)
+    # CVA6 has F/D extensions, so FS can be non-zero
+    # IMPORTANT: FS must NOT be 0, otherwise FP instructions cause illegal instruction exceptions
+    # FS=0 (Off): FP disabled, all FP instructions trap
+    # FS=1 (Initial): FP enabled, initial state
+    # FS=2 (Clean): FP enabled, no modifications
+    # FS=3 (Dirty): FP enabled, state modified
+    xs = random.randint(0, 3)
+    fs = random.randint(1, 3)  # Never Off, always enable FP
+    val |= (xs << 15)
+    val |= (fs << 13)
+
+    # VS[1:0] (10-9) - CVA6 has no V extension
+    vs = 0
+    val |= (vs << 9)
+
+    # MPP[1:0] (12-11): legal values 0 (U), 1 (S), 3 (M)
+    mpp = random.choice([0, 1, 3])
+    val |= (mpp << 11)
+
+    # SPP(8), MPIE(7), UBE(6), SPIE(5), MIE(3), SIE(1)
+    for bit in [8, 7, 5, 3, 1]:
+        val |= (random.randint(0, 1) << bit)
+
+    # UBE(6) - CVA6 is little-endian, keep 0
+    # val |= (0 << 6)
+
+    return val & ((1 << 64) - 1)
+
+
+def _cva6_exception_vector(p: AsmProgram) -> AsmProgram:
+    """
+    [CVA6] Exception handlers for M-mode and S-mode.
+    Similar to XiangShan but adapted for CVA6.
+    """
+    # M-mode trap handler
+    p.label(LBL_OTHER_EXP)
+    p.option("norvc")
+    p.csrr("x13", CSR.MEPC)
+    p.instr("addi", "x13", "x13", "4")
+    p.csrw(CSR.MEPC, "x13")
+    p.mret()
+    p.option("rvc")
+
+    # S-mode trap handler
+    p.label(LBL_OTHER_EXP_S)
+    p.option("norvc")
+    p.csrr("x13", CSR.SEPC)
+    p.instr("addi", "x13", "x13", "4")
+    p.csrw(CSR.SEPC, "x13")
+    p.instr("sret")
+    p.option("rvc")
+
+    return p
+
+
+def _cva6_data_sections(p: AsmProgram) -> AsmProgram:
+    """
+    [CVA6] Data area and custom sections.
+    """
+    p.section(".data")
+    p.directive("align", "6")
+    p.directive("global", SYM_TOHOST)
+    p.label(SYM_TOHOST)
+    if p.arch.is_rv64():
+        p.data_dword(0)
+    else:
+        p.data_word(0, 0)
+
+    p.directive("align", "6")
+    p.directive("global", SYM_FROMHOST)
+    p.label(SYM_FROMHOST)
+    if p.arch.is_rv64():
+        p.data_dword(0)
+    else:
+        p.data_word(0, 0)
+
+    p.section(".region_0", flags="aw", sect_type="@progbits")
+    p.label(SYM_REGION0)
+    rand_words = [f"0x{random.getrandbits(32):08x}" for _ in range(8)]
+    p.data_word(*rand_words)
+
+    # Memory region for load/store operations
+    p.section(".mem_region", flags="aw", sect_type="@progbits")
+    p.align(4)
+    p.label(SYM_MEM_REGION)
+    _init_random_mem_region(p)  # Initialize with random data for fuzzing diversity
+    p.label(SYM_MEM_REGION_END)
 
     return p
 
@@ -1111,6 +1350,44 @@ def build_template_testxs_u_mode(arch: ArchConfig) -> AsmProgram:
     return p
 
 
+def build_template_cva6(arch: ArchConfig) -> AsmProgram:
+    """
+    Build complete CVA6 template.
+
+    CVA6 (formerly Ariane) is a 6-stage, single issue, in-order CPU
+    implementing the 64-bit RISC-V instruction set.
+
+    Supported extensions: RV64GC + B (Zba/Zbb/Zbs/Zbc) + ZKN (crypto)
+    NOT supported: Zfh/Zfhmin (half-precision FP), V (vector), H (hypervisor)
+
+    This template runs in M/S/U modes with simple exception handling.
+    """
+    p = AsmProgram(arch=arch)
+
+    # Startup sequence (trap vector setup, MEPC setup)
+    _cva6_text_startup(p)
+
+    # Mode initialization (MSTATUS, PMP, MIE)
+    _cva6_init(p)
+
+    # Register initialization (NO fmv.h.x!)
+    _cva6_init_reg(p)
+
+    # Exception handlers
+    _cva6_exception_vector(p)
+
+    # Main section with hook
+    _common_main_with_hook(p)
+
+    # Support routines (write_tohost, debug_rom, etc.)
+    _common_support_routines(p)
+
+    # Data sections
+    _cva6_data_sections(p)
+
+    return p
+
+
 def random_mstatus_rv64_h():
     val = 0
 
@@ -1134,9 +1411,14 @@ def random_mstatus_rv64_h():
         val |= (random.randint(0, 1) << bit)
 
     # --- XS[1:0] (16–15), FS[1:0] (14–13), VS[1:0] (10–9) ---
+    # IMPORTANT: FS and VS must NOT be 0, otherwise FP/Vector instructions trap
+    # FS/VS=0 (Off): unit disabled, instructions cause illegal instruction exception
+    # FS/VS=1 (Initial): unit enabled, initial state
+    # FS/VS=2 (Clean): unit enabled, no modifications
+    # FS/VS=3 (Dirty): unit enabled, state modified
     xs = random.randint(0, 3)
-    fs = random.randint(0, 3)
-    vs = random.randint(0, 3)
+    fs = random.randint(1, 3)  # Never Off, always enable FP
+    vs = random.randint(1, 3)  # Never Off, always enable Vector
     val |= (xs << 15)
     val |= (fs << 13)
     val |= (vs << 9)
@@ -1176,6 +1458,7 @@ def build_template(template_type: TemplateType, arch: ArchConfig) -> AsmProgram:
         TemplateType.XIANGSHAN: build_template_xiangshan,
         TemplateType.NUTSHELL: build_template_nutshell,
         TemplateType.ROCKET: build_template_rocket,
+        TemplateType.CVA6: build_template_cva6,
         # TemplateType.TESTXS_U_MODE: build_template_testxs_u_mode,
     }
 

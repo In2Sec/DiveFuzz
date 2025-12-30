@@ -37,7 +37,7 @@ def process_file(filename, folder_path, img_folder, elf_folder):
 
 
     link_dir = Path(__file__).parent.parent / 'generator' / 'reg_analyzer' / 'linker' / 'link.ld'
-    subprocess.run(['riscv64-unknown-elf-as', '-march=rv64g_c_v_zicsr_zifencei_zfh_zba_zbb_zbkc_zbc_zbkb_zbs_zmmul_zknh_zkne_zknd_zbkx_zfhmin', '-c', source_path, '-o', object_file])
+    subprocess.run(['riscv64-unknown-elf-as', '-march=rv64gcv_zicsr_zifencei_zfh_zba_zbb_zbkc_zbc_zbkb_zbs_zmmul_zknh_zkne_zknd_zbkx_zfhmin', '-c', source_path, '-o', object_file])
     subprocess.run(['riscv64-unknown-elf-ld', '-T', link_dir, object_file, '-o', elf_file])
     subprocess.run(['riscv64-unknown-elf-objcopy', '-O', 'binary', elf_file, img_file])
 
@@ -65,7 +65,7 @@ def process_file_for_spec(filename, folder_path, img_folder, elf_folder):
     img_file = os.path.join(img_folder, base_name + '.img')
 
     link_dir = Path(__file__).parent.parent / 'generator' / 'reg_analyzer' / 'linker' / 'link.ld'
-    subprocess.run(['riscv64-unknown-elf-gcc', '-march=rv64g_c_v_zicsr_zifencei_zfh_zba_zbb_zbkc_zbc_zbkb_zbs_zmmul_zknh_zkne_zknd_zbkx_zfhmin', '-c', source_path, '-o', object_file])
+    subprocess.run(['riscv64-unknown-elf-gcc', '-march=rv64gcv_zicsr_zifencei_zfh_zba_zbb_zbkc_zbc_zbkb_zbs_zmmul_zknh_zkne_zknd_zbkx_zfhmin', '-c', source_path, '-o', object_file])
 
     subprocess.run(['riscv64-unknown-elf-ld', '-T', link_dir, object_file, '-o', elf_file])
     subprocess.run(['riscv64-unknown-elf-objcopy', '-O', 'binary', elf_file, img_file])

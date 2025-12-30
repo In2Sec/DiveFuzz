@@ -42,7 +42,8 @@ def create_parser():
                         help='Enable the constraint "Eliminate identical write-back data" (conflict avoidance)'
     )
     parser.add_argument('--architecture', type=str, default='xs',
-                        help='Arch for bug filter(xs, nts, rkt).'
+                        choices=['xs', 'nts', 'rkt', 'kmh', 'cva6'],
+                        help='Architecture for bug filter'
     )
     parser.add_argument('--allowed-ext-name', choices=allowed_ext.EXT_NAMES, default='general',
         help='Select the collection of allowed_ext.'
@@ -95,11 +96,34 @@ def create_parser():
         help='Mutation allows the introduction of the current file did not appear in the expansion of the instruction'
     )
     parser.add_argument(
-        '--exclude-ext', nargs='*', 
+        '--exclude-ext', nargs='*',
         default=[],
         help='List of extensions (separated by spaces) to be excluded at mutation/generation time'
     )
 
+    # —— Debug options ——
+    parser.add_argument(
+        '--debug', action='store_true',
+        help='Enable debug mode: log all register and CSR states after each instruction execution'
+    )
+    parser.add_argument(
+        '--debug-mode', type=str,
+        choices=['FULL', 'DIFF', 'SUMMARY'],
+        default='FULL',
+        help='Debug output mode: FULL (all state), DIFF (changes only), SUMMARY (key regs)'
+    )
+    parser.add_argument(
+        '--debug-all', action='store_true',
+        help='Log ALL instructions (default: only ACCEPTED instructions)'
+    )
+    parser.add_argument(
+        '--debug-no-csr', action='store_true',
+        help='Disable CSR logging in debug output (reduces file size)'
+    )
+    parser.add_argument(
+        '--debug-no-fpr', action='store_true',
+        help='Disable FPR (floating-point registers) logging in debug output'
+    )
 
     return parser
 
