@@ -19,12 +19,12 @@ from enum import Enum, auto
 class TemplateType(Enum):
     """Enumeration of supported template types."""
     # XiangShan templates
-    XIANGSHAN = 'xiangshan'   # xiangshan - M/S/VS/U... mode
+    XIANGSHAN = 'xiangshan'   # xiangshan - M/S/VX/U... mode
 
     # NutShell templates
     NUTSHELL = 'nutshell'     # nutshell - Machine mode with mtvec handler
 
-    # TestXS templates
+    # Rocket templates
     ROCKET = 'rocket'
 
     # CVA6 templates
