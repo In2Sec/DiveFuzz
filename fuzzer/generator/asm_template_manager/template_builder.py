@@ -154,13 +154,13 @@ def _xs_init_reg(p: AsmProgram) -> AsmProgram:
 
     # Phase 1: Initialize x1-x31 with random values
     # We use a specific pattern to ensure all registers get initialized
-    for r in range(1, 32):
+    for r in range(1, 16):
         rand_val = random.getrandbits(64)
         p.li(f"x{r}", f"0x{rand_val:016x}")
 
     # Phase 2: Initialize f0-f31 using the initialized x registers
     # Use x5 (t0) as temp since it's already initialized
-    for r in range(32):
+    for r in range(12):
         rand_val = random.getrandbits(64)
         p.li("x5", f"0x{rand_val:016x}")  # Use t0 as temp register
         # choose a random fmv instruction: h.x / w.x / d.x
