@@ -1989,6 +1989,7 @@ INSTRUCTION_FORMATS = {
             "category": "AMO_STORE"
         },
         # AMO instructions with all ordering variants
+        # TODO: This can be further optimized
         "amoswap.w": {
             "format": "amoswap.w {RD}, {RS2}, ({T6})",
             "variables": ["RD", "T6", "RS2"],
