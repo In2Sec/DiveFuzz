@@ -12,45 +12,89 @@
 # See the Mulan PSL v2 for more details.
 
 """
-Bloom Filter based XOR Cache
+XORCache - Multi-process shared deduplicator based on Bloom Filter
 
-Provides efficient XOR uniqueness checking for multi-process instruction generation
-using shared memory Bloom filter with O(1) check and configurable false positive rate.
+Core functionality:
+    Efficiently detect duplicate (opcode, xor_value) combinations
 
-Usage:
-    # Create cache with dynamic sizing (recommended)
+Design features:
+    1. Bloom Filter: Multiple hash functions, space-efficient
+    2. Pure integer hashing: FNV-1a + SplitMix64 double hashing
+    3. Shared memory: Multi-process safe
+    4. Dynamic capacity: Auto-calculate optimal size based on workload
+
+Usage example:
+    # Master process
     cache = XORCache.create_for_workload(num_seeds=10, instrs_per_seed=1000)
     cache.create()
+    state = cache.get_state_for_worker()
 
-    # Or create with explicit size
-    cache = XORCache(size_mb=1.0)
-    cache.create()
-
-    # In each worker process
-    cache.attach()
-    if cache.check_and_add(opcode, xor_value):
-        # XOR is unique, proceed
-        pass
+    # Worker process
+    cache = XORCache.from_worker_state(state)
+    if cache.check_and_add("add", xor_value):
+        # New combination, accept
     else:
-        # Duplicate, retry
-        pass
+        # Possible duplicate, regenerate
+
+    # Master cleanup
+    cache.cleanup()
 """
 
-import hashlib
 import math
 import os
 from multiprocessing import shared_memory
-from typing import Optional
+from typing import Optional, Dict, Any
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+# FNV-1a hash constants (64-bit)
+_FNV_PRIME: int = 0x100000001b3
+_FNV_OFFSET: int = 0xcbf29ce484222325
+
+# SplitMix64 / Knuth multiplicative hash constants
+_HASH_MUL_1: int = 0x9e3779b97f4a7c15  # Golden ratio
+_HASH_MUL_2: int = 0x517cc1b727220a95  # Quality multiplier
+_HASH_MUL_3: int = 0xbf58476d1ce4e5b9  # SplitMix64
+_HASH_MUL_4: int = 0x94d049bb133111eb  # SplitMix64
+
+# 64-bit mask
+_MASK_64: int = 0xFFFFFFFFFFFFFFFF
+
+# Default configuration
+_DEFAULT_SIZE_MB: float = 1.0
+_DEFAULT_NUM_HASHES: int = 7
+_MIN_SIZE_BITS: int = 64 * 1024 * 8       # 64 KB
+_MAX_SIZE_BITS: int = 16 * 1024 * 1024 * 8  # 16 MB
+_CHUNK_SIZE: int = 1024 * 1024  # 1 MB chunked zeroing
+
+
+# =============================================================================
+# Helper functions
+# =============================================================================
+
+def _fnv1a_hash(s: str) -> int:
+    """FNV-1a string hash, returns 64-bit integer"""
+    h = _FNV_OFFSET
+    for byte in s.encode('utf-8'):
+        h ^= byte
+        h = (h * _FNV_PRIME) & _MASK_64
+    return h
 
 
 def compute_xor(values: list) -> int:
     """
-    Compute XOR value from register values using shifted XOR.
+    Compute shifted XOR value of register values
 
-    Each value is shifted by its index position before XOR-ing.
-    This ensures different orderings produce different results:
-        [A, B] -> A ^ (B << 1)
-        [B, A] -> B ^ (A << 1)  (different result)
+    Each value is shifted by its index position then XORed,
+    ensuring different orders produce different results
+
+    Args:
+        values: List of register values
+
+    Returns:
+        Shifted XOR result
     """
     result = 0
     for i, value in enumerate(values):
@@ -58,33 +102,37 @@ def compute_xor(values: list) -> int:
     return result
 
 
+# =============================================================================
+# Core class
+# =============================================================================
+
 class XORCache:
     """
-    Shared memory Bloom filter for fast XOR uniqueness checking across processes.
+    Shared memory-based Bloom Filter deduplicator
 
-    A Bloom filter is a space-efficient probabilistic data structure that tests
-    whether an element is a member of a set. It may have false positives
-    (saying something exists when it doesn't) but never false negatives
-    (if it says something doesn't exist, it definitely doesn't).
+    Bloom Filter characteristics:
+    - False positives: May occur (judged duplicate but actually not) → Some regeneration
+    - False negatives: Never occur (judged unique is definitely unique) → Guarantees diversity
 
-    For our use case:
-    - False positive: We reject a unique XOR value (think it's duplicate)
-      → Slightly reduces diversity, but safe
-    - False negative: We accept a duplicate XOR value (think it's unique)
-      → Never happens with Bloom filter
-
-    Memory is shared across processes via multiprocessing.shared_memory,
-    allowing all worker processes to check/add to the same filter.
+    Deduplication granularity:
+    - Each (opcode, xor_value) combination is independently checked
+    - Different opcodes are naturally non-duplicate: add:100 and sub:100 both accepted
+    - Same opcode checks xor_value: add:100 and add:100 judged as duplicate
     """
 
-    def __init__(self, size_mb: float = 1.0, num_hashes: int = 7, name: str = None):
+    def __init__(
+        self,
+        size_mb: float = _DEFAULT_SIZE_MB,
+        num_hashes: int = _DEFAULT_NUM_HASHES,
+        name: Optional[str] = None
+    ):
         """
-        Initialize XOR cache with explicit size.
+        Initialize XOR cache
 
         Args:
-            size_mb: Size in MB for Bloom filter (default 1MB = 8M bits)
-            num_hashes: Number of hash functions (default 7)
-            name: Shared memory name (auto-generated if None)
+            size_mb: Bloom Filter size in MB, default 1MB
+            num_hashes: Number of hash functions, default 7
+            name: Shared memory name, auto-generated by default
         """
         self._size_bits = int(size_mb * 8_000_000)
         self._size_bytes = (self._size_bits + 7) // 8
@@ -93,50 +141,47 @@ class XORCache:
 
         self._shm: Optional[shared_memory.SharedMemory] = None
         self._buffer: Optional[memoryview] = None
-        self._owner = False
+        self._is_owner = False
+
+        # Opcode hash cache to avoid repeated computation
+        self._opcode_cache: Dict[str, int] = {}
 
     @classmethod
     def create_for_workload(
         cls,
         num_seeds: int,
         instrs_per_seed: int,
-        false_positive_rate: float = 0.01,
+        false_positive_rate: float = 0.001,
         safety_factor: float = 1.5,
-        name: str = None
+        name: Optional[str] = None
     ) -> 'XORCache':
         """
-        Create XORCache with optimal size for the given workload.
+        Create optimally-sized cache based on workload
 
-        Uses mathematical formulas to calculate optimal Bloom filter size:
+        Uses Bloom Filter optimal parameter formulas:
         - Size (bits): m = -n * ln(p) / (ln(2))^2
-        - Hash count: k = (m/n) * ln(2)
-
-        Where n = expected elements, p = false positive rate
+        - Number of hashes: k = (m/n) * ln(2)
 
         Args:
-            num_seeds: Number of seed files to generate
-            instrs_per_seed: Instructions per seed file
-            false_positive_rate: Target false positive rate (default 1%)
-            safety_factor: Multiply expected elements by this (default 1.5)
-            name: Shared memory name (auto-generated if None)
+            num_seeds: Number of seed files
+            instrs_per_seed: Number of instructions per seed
+            false_positive_rate: Target false positive rate, default 1%
+            safety_factor: Safety multiplier, default 1.5x
+            name: Shared memory name
 
         Returns:
-            XORCache instance with optimal sizing
+            Configured XORCache instance
         """
         expected_elements = int(num_seeds * instrs_per_seed * safety_factor)
-
-        # Calculate optimal size: m = -n * ln(p) / (ln(2))^2
         if expected_elements <= 0:
             expected_elements = 10000
+
+        # Calculate optimal size
         ln2_squared = math.log(2) ** 2
         bits_needed = -expected_elements * math.log(false_positive_rate) / ln2_squared
+        size_bits = max(_MIN_SIZE_BITS, min(int(bits_needed), _MAX_SIZE_BITS))
 
-        # Apply bounds: 64KB minimum, 16MB maximum
-        min_bits = 64 * 1024 * 8      # 64 KB
-        max_bits = 16 * 1024 * 1024 * 8  # 16 MB
-        size_bits = max(min_bits, min(int(bits_needed), max_bits))
-
-        # Calculate optimal hash count: k = (m/n) * ln(2)
+        # Calculate optimal number of hashes
         optimal_k = (size_bits / expected_elements) * math.log(2)
         num_hashes = max(3, min(int(optimal_k + 0.5), 10))
 
@@ -148,18 +193,162 @@ class XORCache:
         instance._name = name or f"xor_bloom_{os.getpid()}"
         instance._shm = None
         instance._buffer = None
-        instance._owner = False
+        instance._is_owner = False
+        instance._opcode_cache = {}
 
         return instance
 
-    def create(self):
-        """
-        Create shared memory region (call from main process only).
+    # -------------------------------------------------------------------------
+    # Core API
+    # -------------------------------------------------------------------------
 
-        This allocates the shared memory and initializes all bits to 0.
-        Worker processes should call attach() instead.
+    def check_and_add(self, opcode: str, xor_value: int) -> bool:
         """
-        # Clean up any existing shared memory with same name
+        Check if (opcode, xor_value) is unique, add if unique
+
+        Args:
+            opcode: Instruction opcode (e.g. "add", "sub")
+            xor_value: Shifted XOR value of source operands
+
+        Returns:
+            True: New combination, added
+            False: Possible duplicate (false positive or true duplicate)
+        """
+        if self._buffer is None:
+            return True  # Not initialized, allow all
+
+        positions = self._hash_positions(opcode, xor_value)
+
+        # Check if all bits are already set
+        for pos in positions:
+            byte_idx = pos // 8
+            bit_idx = pos % 8
+            if not (self._buffer[byte_idx] & (1 << bit_idx)):
+                # At least one bit is 0, definitely new
+                self._set_bits(positions)
+                return True
+
+        # All bits are 1, may exist
+        return False
+
+    # -------------------------------------------------------------------------
+    # Serialization/Deserialization (multi-process support)
+    # -------------------------------------------------------------------------
+
+    def get_state_for_worker(self) -> Dict[str, Any]:
+        """
+        Get serializable state for passing to worker process
+
+        Returns:
+            Dictionary containing information needed to reconstruct instance
+        """
+        return {
+            'name': self._name,
+            'size_bits': self._size_bits,
+            'size_bytes': self._size_bytes,
+            'num_hashes': self._num_hashes,
+            'shm_name': self._shm.name if self._shm else self._name,
+        }
+
+    @classmethod
+    def from_worker_state(cls, state: Dict[str, Any]) -> 'XORCache':
+        """
+        Restore instance from serialized state (called by worker process)
+
+        Args:
+            state: State dictionary returned by get_state_for_worker()
+
+        Returns:
+            XORCache instance attached to shared memory
+        """
+        instance = cls.__new__(cls)
+        instance._name = state['name']
+        instance._size_bits = state['size_bits']
+        instance._size_bytes = state['size_bytes']
+        instance._num_hashes = state['num_hashes']
+        instance._opcode_cache = {}
+        instance._is_owner = False
+
+        # Attach to existing shared memory
+        instance._shm = shared_memory.SharedMemory(name=state['shm_name'])
+        instance._buffer = memoryview(instance._shm.buf)
+
+        return instance
+
+    # -------------------------------------------------------------------------
+    # Persistence
+    # -------------------------------------------------------------------------
+
+    def save(self, filepath: str) -> None:
+        """
+        Save Bloom Filter to file
+
+        For incremental fuzzing, maintains deduplication state across runs
+        Note: Only supports restoring cache of same size
+
+        Args:
+            filepath: Save path
+        """
+        if self._buffer is None:
+            raise RuntimeError("Cache not initialized, cannot save")
+
+        with open(filepath, 'wb') as f:
+            # Write metadata
+            import struct
+            header = struct.pack('<QII',
+                                 self._size_bits,
+                                 self._size_bytes,
+                                 self._num_hashes)
+            f.write(header)
+            # Write bitmap data
+            f.write(bytes(self._buffer))
+
+    def load(self, filepath: str) -> None:
+        """
+        Load Bloom Filter from file
+
+        Note:
+        - Overwrites current bitmap data
+        - Requires file size to match current instance size
+        - Raises ValueError if size mismatch
+
+        Args:
+            filepath: File path
+        """
+        if self._buffer is None:
+            raise RuntimeError("Cache not initialized, cannot load")
+
+        if not os.path.exists(filepath):
+            return
+
+        with open(filepath, 'rb') as f:
+            import struct
+            header = f.read(16)
+            size_bits, size_bytes, num_hashes = struct.unpack('<QII', header)
+
+            # Verify compatibility
+            if size_bytes != self._size_bytes:
+                raise ValueError(
+                    f"Size mismatch: file has {size_bytes} bytes, "
+                    f"cache has {self._size_bytes} bytes"
+                )
+
+            # Load bitmap data
+            data = f.read(self._size_bytes)
+            self._buffer[:len(data)] = data
+
+    # -------------------------------------------------------------------------
+    # Lifecycle management
+    # -------------------------------------------------------------------------
+
+    def create(self) -> None:
+        """
+        Create shared memory region (only called by master process)
+
+        Allocates shared memory and initializes all bits to 0
+        Worker processes should use from_worker_state() instead
+        """
+        # Clean up potentially existing shared memory with same name
         try:
             existing = shared_memory.SharedMemory(name=self._name)
             existing.close()
@@ -173,186 +362,131 @@ class XORCache:
             size=self._size_bytes
         )
         self._buffer = memoryview(self._shm.buf)
-        self._owner = True
+        self._is_owner = True
 
-        # Clear all bits (initialize to empty)
-        for i in range(self._size_bytes):
-            self._buffer[i] = 0
+        # Efficient chunked zeroing
+        self._zero_memory()
 
-    def attach(self):
+    def cleanup(self) -> None:
         """
-        Attach to existing shared memory (call from worker processes).
+        Clean up shared memory resources (only owner should call)
 
-        Workers connect to the shared memory created by the main process.
+        Releases shared memory, worker processes should not call this method
         """
-        self._shm = shared_memory.SharedMemory(name=self._name)
-        self._buffer = memoryview(self._shm.buf)
-        self._owner = False
+        try:
+            if self._buffer:
+                self._buffer.release()
+                self._buffer = None
+            if self._shm:
+                self._shm.close()
+                if self._is_owner:
+                    self._shm.unlink()
+                self._shm = None
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        """Alias of cleanup(), maintains backward compatibility"""
+        self.cleanup()
+
+    def __enter__(self) -> 'XORCache':
+        """Context manager entry"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        """Context manager exit, ensures resource cleanup"""
+        self.cleanup()
+        return False
+
+    def __del__(self):
+        """Close shared memory connection on destruction"""
+        try:
+            if self._shm:
+                self._shm.close()
+        except Exception:
+            pass
+
+    # -------------------------------------------------------------------------
+    # Internal methods
+    # -------------------------------------------------------------------------
+
+    def _get_opcode_hash(self, opcode: str) -> int:
+        """Get cached hash value of opcode"""
+        if opcode not in self._opcode_cache:
+            self._opcode_cache[opcode] = _fnv1a_hash(opcode)
+        return self._opcode_cache[opcode]
 
     def _hash_positions(self, opcode: str, value: int) -> list:
         """
-        Compute k bit positions for a (opcode, value) pair.
+        Calculate k positions in bitmap for (opcode, value)
 
-        Uses SHA256 with different salts to generate independent hash functions.
-        Each hash maps to a position in the bit array.
-
-        Args:
-            opcode: Instruction opcode (e.g., "add", "sub")
-            value: XOR value to hash
-
-        Returns:
-            List of k bit positions
+        Uses double hashing trick: only compute h1, h2, generate k positions via linear combination
         """
-        positions = []
-        key = f"{opcode}:{value}".encode()
+        # Get cached opcode hash
+        opcode_hash = self._get_opcode_hash(opcode)
 
-        for i in range(self._num_hashes):
-            # SHA256 with salt for different hash functions
-            h = hashlib.sha256(key + i.to_bytes(1, 'little')).digest()
-            # Use first 8 bytes as position, mod by filter size
-            pos = int.from_bytes(h[:8], 'little') % self._size_bits
-            positions.append(pos)
+        # Mix opcode and value
+        combined = opcode_hash ^ ((value * _HASH_MUL_1) & _MASK_64)
 
-        return positions
+        # Generate h1 (SplitMix64 style)
+        h1 = combined
+        h1 = ((h1 ^ (h1 >> 33)) * _HASH_MUL_3) & _MASK_64
+        h1 = ((h1 ^ (h1 >> 29)) * _HASH_MUL_4) & _MASK_64
+        h1 = (h1 ^ (h1 >> 32)) & _MASK_64
 
-    def _check(self, opcode: str, value: int) -> bool:
-        """
-        Check if value might exist in the filter.
+        # Generate h2
+        h2 = combined
+        h2 = ((h2 ^ (h2 >> 31)) * _HASH_MUL_2) & _MASK_64
+        h2 = ((h2 ^ (h2 >> 27)) * _HASH_MUL_1) & _MASK_64
+        h2 = (h2 ^ (h2 >> 33)) & _MASK_64
 
-        Returns True if ALL k bits are set (possibly exists).
-        Returns False if ANY bit is 0 (definitely doesn't exist).
-        """
-        for pos in self._hash_positions(opcode, value):
-            byte_idx = pos // 8
-            bit_idx = pos % 8
-            if not (self._buffer[byte_idx] & (1 << bit_idx)):
-                return False  # At least one bit is 0 -> definitely not in set
-        return True  # All bits set -> possibly in set
+        # Double hashing formula: pos[i] = (h1 + i * h2) mod m
+        return [(h1 + i * h2) % self._size_bits for i in range(self._num_hashes)]
 
-    def _add(self, opcode: str, value: int):
-        """Set all k bits for the given value."""
-        for pos in self._hash_positions(opcode, value):
+    def _set_bits(self, positions: list) -> None:
+        """Set all bits at specified positions"""
+        for pos in positions:
             byte_idx = pos // 8
             bit_idx = pos % 8
             self._buffer[byte_idx] |= (1 << bit_idx)
 
-    def check_and_add(self, opcode: str, xor_value: int) -> bool:
-        """
-        Check if XOR is unique and add it atomically.
+    def _zero_memory(self) -> None:
+        """Efficiently zero shared memory in chunks"""
+        zeros = b'\x00' * min(_CHUNK_SIZE, self._size_bytes)
+        for i in range(0, self._size_bytes, _CHUNK_SIZE):
+            end = min(i + _CHUNK_SIZE, self._size_bytes)
+            self._shm.buf[i:end] = zeros[:end - i]
 
-        Returns:
-            True if value was unique (added), False if possibly duplicate
-        """
-        if self._buffer is None:
-            return True  # Not initialized, allow everything
-        if self._check(opcode, xor_value):
-            return False  # Possibly exists -> duplicate
-        self._add(opcode, xor_value)
-        return True  # Definitely new -> unique
-
-    def is_unique(self, opcode: str, source_values: list) -> tuple:
-        """
-        Check if computed XOR value is unique.
-
-        Convenience method that computes XOR from source values.
-
-        Args:
-            opcode: Instruction opcode
-            source_values: Source register values
-
-        Returns:
-            Tuple of (xor_value, is_unique)
-        """
-        xor_value = compute_xor(source_values)
-        is_unique = self.check_and_add(opcode, xor_value)
-        return xor_value, is_unique
+    # -------------------------------------------------------------------------
+    # Property accessors
+    # -------------------------------------------------------------------------
 
     @property
     def name(self) -> str:
-        """Get shared memory name."""
+        """Shared memory name"""
         return self._name
 
     @property
+    def is_owner(self) -> bool:
+        """Whether this is the owner (creator)"""
+        return self._is_owner
+
+    @property
+    def size_bits(self) -> int:
+        """Bloom Filter size in bits"""
+        return self._size_bits
+
+    @property
     def size_kb(self) -> float:
-        """Get filter size in KB."""
-        return self._size_bits / 8 / 1024
+        """Bloom Filter size in KB"""
+        return self._size_bytes / 1024
 
     @property
     def size_mb(self) -> float:
-        """Get filter size in MB."""
-        return self._size_bits / 8 / 1024 / 1024
+        """Bloom Filter size in MB"""
+        return self._size_bytes / 1024 / 1024
 
-    def get_stats(self) -> dict:
-        """Get cache statistics."""
-        return {
-            'size_bits': self._size_bits,
-            'size_kb': self.size_kb,
-            'size_mb': self.size_mb,
-            'num_hashes': self._num_hashes,
-            'name': self._name
-        }
-
-    def close(self):
-        """Close and cleanup shared memory."""
-        if self._buffer:
-            self._buffer.release()
-            self._buffer = None
-        if self._shm:
-            self._shm.close()
-            if self._owner:
-                try:
-                    self._shm.unlink()
-                except FileNotFoundError:
-                    pass
-            self._shm = None
-
-    def __enter__(self):
-        """Context manager entry."""
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit - ensures cleanup."""
-        self.close()
-        return False
-
-
-if __name__ == "__main__":
-    print("XOR Cache Module - Bloom Filter with Dynamic Sizing")
-    print("=" * 60)
-
-    # Test dynamic sizing calculations
-    print("\n[1] Dynamic Size Calculation Examples:")
-    test_cases = [
-        (10, 100),      # Small: 10 seeds × 100 instrs = 1,000
-        (10, 1000),     # Medium: 10 seeds × 1000 instrs = 10,000
-        (100, 1000),    # Large: 100 seeds × 1000 instrs = 100,000
-        (1000, 1000),   # XLarge: 1000 seeds × 1000 instrs = 1,000,000
-    ]
-
-    for num_seeds, instrs_per_seed in test_cases:
-        cache = XORCache.create_for_workload(num_seeds, instrs_per_seed)
-        print(f"  {num_seeds:4d} seeds × {instrs_per_seed:4d} instrs → "
-              f"{cache.size_kb:7.1f} KB, {cache._num_hashes} hashes")
-
-    # Test with context manager
-    print("\n[2] Testing with context manager (auto cleanup)...")
-    with XORCache.create_for_workload(num_seeds=10, instrs_per_seed=1000) as cache:
-        cache.create()
-
-        stats = cache.get_stats()
-        print(f"  Created cache: {stats['size_kb']:.1f} KB, {stats['num_hashes']} hashes")
-
-        # Add some values
-        for i in range(1000):
-            cache.check_and_add("add", i)
-
-        # Check duplicates
-        false_count = sum(1 for i in range(1000) if not cache.check_and_add("add", i))
-        print(f"  Correctly identified {false_count}/1000 as duplicates")
-
-        # Check new values
-        new_count = sum(1 for i in range(1000, 2000) if cache.check_and_add("add", i))
-        print(f"  Correctly identified {new_count}/1000 as new")
-
-    print("  Cache automatically cleaned up on exit")
-    print("\nDone!")
+    @property
+    def num_hashes(self) -> int:
+        """Number of hash functions"""
+        return self._num_hashes

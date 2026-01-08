@@ -111,6 +111,19 @@ SPECIAL_PROB_BOOM = {
     
 }
 
+SPECIAL_PROB_XINAGSHAN = {
+
+}
+
+# ========= 8) Rocket (RV64GC) =========
+SPECIAL_PROB_ROCKET = {
+    # Use uniform distribution by default
+}
+
+SPECIAL_PROB_ROCKET_RV32 = {
+    # Use uniform distribution by default
+}
+
 SPECIAL_PROB_PROFILES = {
     "cva6": SPECIAL_PROB_CVA6,
     "cva6_cascade": SPECIAL_PROB_CVA6_CASCADE,
@@ -119,5 +132,8 @@ SPECIAL_PROB_PROFILES = {
     "base": SPECIAL_PROB_BASE,
     "nutshell": SPECIAL_PROB_NUTSHELL,
     "nutshell_rv32": SPECIAL_PROB_NUTSHELL_RV32,
-    'boom': SPECIAL_PROB_BOOM
+    'boom': SPECIAL_PROB_BOOM,
+    'xiangshan': SPECIAL_PROB_XINAGSHAN,
+    'rocket': SPECIAL_PROB_ROCKET,
+    'rocket_rv32': SPECIAL_PROB_ROCKET_RV32,
 }

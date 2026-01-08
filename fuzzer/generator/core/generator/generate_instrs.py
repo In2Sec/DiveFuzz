@@ -255,7 +255,7 @@ def generate_instructions(instr_number: int,
                           arch: ArchConfig,
                           template_type: str,
                           out_dir: str,
-                          shared_xor_cache,  # Deprecated: kept for API compatibility
+                          xor_cache_state: dict,
                           architecture: str,
                           debug_config: dict = None):
     """
@@ -268,12 +268,11 @@ def generate_instructions(instr_number: int,
         is_rv32: Use RV32 architecture
         arch: Architecture configuration for template creation
         template_type: Template type name
-        out_dir: Output directory for seeds and XOR cache
-        shared_xor_cache: (Deprecated) Not used - XOR cache is now per-process LOCAL mode
+        out_dir: Output directory for seeds
+        xor_cache_state: Serialized XORCache state from Master (via get_state_for_worker)
         architecture: Architecture for bug filtering ('xs', 'nts', 'rkt', 'kmh')
         debug_config: Debug configuration dict (see generate_instructions_parallel)
     """
-    # Note: shared_xor_cache is no longer used (v4.0 architecture uses LOCAL XORCache)
 
     # Create fresh template instance for this seed with random type and values
     # This ensures each seed gets independent random content (MSTATUS, register init, etc.)
@@ -299,9 +298,11 @@ def generate_instructions(instr_number: int,
                     instr_number + NOP_REDUNDANCY
                 )
                 if spike_session.initialize():
-                    # Create XOR cache for this process
-                    xor_cache = XORCache()
-                    xor_cache.create()
+                    # Attach to shared XOR cache from Master process
+                    if xor_cache_state is not None:
+                        xor_cache = XORCache.from_worker_state(xor_cache_state)
+                    else:
+                        raise RuntimeError("XOR cache state is None")
 
                     # Create validator with simplified architecture (v4.0)
                     encoder = HybridEncoder(quiet=True)
@@ -818,7 +819,7 @@ def generate_instructions(instr_number: int,
         return resolve_duplicates, resolve_duplicates_fail
 
     finally:
-        # Clean up XOR cache (release shared memory)
+        # Close XOR cache connection
         if xor_cache is not None:
             try:
                 xor_cache.close()

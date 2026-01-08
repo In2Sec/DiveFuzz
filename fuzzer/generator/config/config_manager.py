@@ -49,7 +49,15 @@ class Config:
         allowed_ext.setup_ext(self.allowed_ext_name)
 
         # --architecture: bug filter (xs, nts, rkt, cva6, etc.)
-        self.architecture = str(args.architecture)
+        # Map CLI architecture names to internal bug_filter names
+        arch_mapping = {
+            'xiangshan': 'xs',
+            'nutshell': 'nts',
+            'rocket': 'xs',  # Use XiangShan filters for Rocket (similar RV64GC)
+            'cva6': 'cva6',
+            'boom': 'boom',
+        }
+        self.architecture = arch_mapping.get(args.architecture, args.architecture)
         bug_filter.set_architecture(self.architecture)
 
         # --template-type: template (xiangshan, cva6, nutshell, etc.)

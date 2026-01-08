@@ -69,10 +69,13 @@ def process_content(file_path: str,
     # Initialize Spike session for eliminate mode (similar to generate_instructions)
     spike_session = None
     validator = None
-    shared_xor_cache = {}  # Local XOR cache for mutation
+    xor_cache = None
 
     if eliminate_enable and SPIKE_ENGINE_AVAILABLE:
         try:
+            from ...reg_analyzer.xor_cache import XORCache
+            from ...reg_analyzer.hybrid_encoder import HybridEncoder
+
             # Estimate instruction count from file content
             instr_count = len([line for line in file_content.split('\n')
                              if line.strip() and not line.strip().startswith('#')
@@ -87,12 +90,24 @@ def process_content(file_path: str,
             spike_session = SpikeSession(
                 elf_path,
                 template.isa,
-                instr_count,
-                shared_xor_cache
+                instr_count
             )
 
             if spike_session.initialize():
-                validator = InstructionValidator(spike_session)
+                # Create local XOR cache for mutation (no cross-process sharing needed)
+                xor_cache = XORCache.create_for_workload(
+                    num_seeds=1,
+                    instrs_per_seed=instr_count
+                )
+                xor_cache.create()
+
+                encoder = HybridEncoder(quiet=True)
+                validator = InstructionValidator(
+                    spike_session=spike_session,
+                    xor_cache=xor_cache,
+                    architecture='xs',  # Default architecture
+                    encoder=encoder
+                )
             else:
                 spike_session = None
                 validator = None
@@ -101,6 +116,7 @@ def process_content(file_path: str,
             print(f"[Mutate] Failed to initialize Spike session: {e}")
             spike_session = None
             validator = None
+            xor_cache = None
 
     instruction_freq = count_instructions({file_path: file_content})
     increase_queue, decrease_queue, classified_instructions, geometric_means, missing_ext = classify_instructions(instruction_freq)
@@ -241,6 +257,10 @@ def process_content(file_path: str,
     # TODO use template rather than replace content
     # replace_content(file_path, updated_content, new_file_path)  # Assume updated_content is a list of strings
     write_instructions_to_file(new_file_path, list2str_without_indent(updated_content), template)
+
+    # Cleanup XOR cache
+    if xor_cache is not None:
+        xor_cache.cleanup()
 
     # Cleanup Spike session
     if spike_session is not None:

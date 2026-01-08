@@ -229,12 +229,23 @@ def _build_boom_bugs() -> Tuple[Registry, CSRBlacklist]:
     return reg, csr_bl
 
 
+def _build_rocket_bugs() -> Tuple[Registry, CSRBlacklist]:
+    """Build Rocket-specific bug patterns and CSR blacklist."""
+    reg = _build_registry()
+    csr_bl = _build_csr_blacklist()
+    from . import filters_rocket
+    filters_rocket.register(reg)
+    if hasattr(filters_rocket, 'register_csr_blacklist'):
+        filters_rocket.register_csr_blacklist(csr_bl)
+    return reg, csr_bl
+
+
 def get_known_bugs(architecture: str) -> Tuple[Registry, CSRBlacklist]:
     """
     Return known bug patterns and CSR blacklist for the corresponding architecture.
 
     Args:
-        architecture: str, supports 'xs', 'nts', 'rkt', 'kmh', 'cva6', 'boom'
+        architecture: str, supports 'xs', 'nts', 'rkt', 'kmh', 'cva6', 'boom', 'rocket'
 
     Returns:
         Tuple of (Registry, CSRBlacklist):
@@ -249,5 +260,7 @@ def get_known_bugs(architecture: str) -> Tuple[Registry, CSRBlacklist]:
         return _build_cva6_bugs()
     elif architecture == 'boom':
         return _build_boom_bugs()
+    elif architecture in ('rocket', 'rkt'):
+        return _build_rocket_bugs()
     else:
         raise ValueError(f"Unknown architecture: {architecture}")
