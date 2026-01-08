@@ -107,18 +107,49 @@ def _xs_init(p: AsmProgram) -> AsmProgram:
     p.csrw(CSR.MSTATUS, "x26", comment=f"MSTATUS (mode is {mpp})")
     # Build PMP (Physical Memory Protection) setup.
     # Use NAPOT mode to cover entire address space (including mem_region for AMO instructions)
-    # pmpaddr0 = ~0 (all 1s) with NAPOT mode covers the entire address space
-    # pmpcfg0 = 0x1f means: A=NAPOT(0b11), R=1, W=1, X=1
+    #
+    # In RV64, PMP configuration registers layout:
+    #   - pmpcfg0 (0x3a0): configures entries 0-7 (8 bytes, 1 byte per entry)
+    #   - pmpcfg2 (0x3a2): configures entries 8-15
+    #   - pmpcfg1/pmpcfg3 do NOT exist in RV64 (only in RV32)
+    #
+    # Strategy:
+    #   1. pmpaddr0 = all 1s for NAPOT covering entire address space
+    #   2. pmpcfg0 entry 0 = 0x1f (NAPOT mode, RWX permissions)
+    #   3. Clear pmpcfg2 to disable entries 8-15
+    #
+    # Note: PMP is always set to ensure consistent state between Spike and DUT.
+    p.li("x16", -1)  # All 1s = 0xffffffffffffffff
+    p.csrw(0x3b0, "x16", comment="pmpaddr0 = all 1s (NAPOT full coverage)")
+    p.li("x16", 0x1f)  # Entry 0: A=NAPOT(11), X=1, W=1, R=1
+    p.csrw(0x3a0, "x16", comment="pmpcfg0: entry 0 = NAPOT+RWX")
+    p.li("x16", 0x0)
+    p.csrw(0x3a2, "x16", comment="pmpcfg2 = 0 (disable entries 8-15)")
     if mpp != 3:
-        p.li("x16", -1)  # All 1s = 0xffffffffffffffff
-        p.csrw(0x3b0, "x16")  # pmpaddr0
-        p.li("x16", 0x1f)  # NAPOT + RWX
-        p.csrw(0x3a0, "x16")  # pmpcfg0
-
         p.instr("sfence.vma x0, x0")
 
+    # Initialize exception delegation registers to ensure consistency
+    # between Spike and DUT (BOOM). Without this, random CSR writes to
+    # medeleg/mideleg can cause Spike and DUT to use different trap vectors.
     p.li("x26", "0x0")
+    p.csrw(CSR.MEDELEG, "x26", comment="MEDELEG - no delegation to S-mode")
+    p.csrw(CSR.MIDELEG, "x26", comment="MIDELEG - no delegation to S-mode")
     p.csrw(CSR.MIE, "x26", comment="MIE")
+
+    # =========================================================================
+    # Initialize scratch/trap-value CSRs to zero for cosim state synchronization
+    # =========================================================================
+    # Machine-level scratch and trap value registers:
+    p.csrw(CSR.MSCRATCH, "x26", comment="MSCRATCH - init to 0 for cosim sync")
+    p.csrw(CSR.MTVAL, "x26", comment="MTVAL - init to 0 for cosim sync")
+    p.csrw(CSR.MCAUSE, "x26", comment="MCAUSE - init to 0 for cosim sync")
+    # Supervisor-level scratch and trap value registers:
+    p.csrw(CSR.SSCRATCH, "x26", comment="SSCRATCH - init to 0 for cosim sync")
+    p.csrw(CSR.STVAL, "x26", comment="STVAL - init to 0 for cosim sync")
+    p.csrw(CSR.SCAUSE, "x26", comment="SCAUSE - init to 0 for cosim sync")
+    p.csrw(CSR.SEPC, "x26", comment="SEPC - init to 0 for cosim sync")
+    # =========================================================================
+
     p.mret()
     return p
 
@@ -147,6 +178,11 @@ def _xs_init_reg(p: AsmProgram) -> AsmProgram:
         rm = random.choice(minor_modes)
 
     p.instr("fsrmi", str(rm))
+    # Clear fflags to ensure consistent initial state between Spike and DUT.
+    # RISC-V spec does NOT mandate a reset value for fflags - it's software's
+    # responsibility to clear it. Different implementations may have different
+    # initial values (e.g., Spike=0, BOOM=0x10), which would cause false positives.
+    p.instr("csrwi", "fflags", "0")
 
     # === General-purpose and floating-point register initialization ===
     # Initialize ALL x1-x31 and f0-f31 for deterministic testing
@@ -267,21 +303,100 @@ def _init_data_sections(p: AsmProgram) -> AsmProgram:
 # NutShell M-mode Private Functions (_nutshell_m_*)
 # ------------------------------------------------------------------------------
 
+def _random_mstatus_nutshell():
+    """
+    Generate random MSTATUS value for NutShell.
+
+    NutShell Config (from CSR.scala):
+    - RV64 (XLEN=64)
+    - No H extension
+    - Supports M/S/U modes (extList includes 'a', 's', 'i', 'u', 'm', 'c')
+    - Has MMU (SV39, VAddrBits=39)
+    - No F/D extension (no FPU), but FS field exists in hardware
+    - PMP: 4 entries (pmpaddr0-3)
+
+    MSTATUS writable mask (from CSR.scala line 301-313):
+    - NOT writable: SD(63), WPRI(62-38), MBE(37), SBE(36), SXL/UXL(35-32),
+                    XS(16-15), UBE(6), WPRI bits
+    - Writable: TSR, TW, TVM, MXR, SUM, MPRV, FS, MPP, HPP, SPP, PIE, IE
+
+    Initial value in hardware: 0xa00001800 (MPP=3, SXL=2, UXL=2)
+    """
+    val = 0
+
+    # SD(63) - derived by hardware from FS/XS, keep 0
+
+    # SXL[1:0] (35-34) & UXL[1:0] (33-32)
+    # NutShell RV64: hardwired to 2 (64-bit), cannot change
+    sxl = 2
+    uxl = 2
+    val |= (sxl << 34)
+    val |= (uxl << 32)
+
+    # TSR(22), TW(21), TVM(20), MXR(19), SUM(18)
+    # All these bits are writable in NutShell
+    for bit in [22, 21, 20, 19, 18]:
+        val |= (random.randint(0, 1) << bit)
+
+    # MPRV(17) - Fixed to 0 to avoid NutShell bug #252:
+    # "MRET/SRET Do Not Clear MPRV When Returning to a Less-Privileged Mode"
+    # https://github.com/OSCPU/NutShell/issues/252
+
+    # XS[1:0] (16-15) - read-only in NutShell, keep 0
+    xs = 0
+    val |= (xs << 15)
+
+    # FS[1:0] (14-13) - NutShell has no FPU but the field is writable
+    # Setting FS=0 (Off) is safe since NutShell doesn't support F/D
+    # But we can randomize it for testing CSR write behavior
+    fs = random.randint(0, 3)
+    val |= (fs << 13)
+
+    # MPP[1:0] (12-11): legal values 0 (U), 1 (S), 3 (M)
+    # NutShell supports all three modes
+    mpp = random.choice([0, 1, 3])
+    val |= (mpp << 11)
+
+    # HPP[1:0] (10-9) - NutShell has no H-mode, keep 0
+    hpp = 0
+    val |= (hpp << 9)
+
+    # SPP(8) - 0=U-mode, 1=S-mode (legal values)
+    spp = random.randint(0, 1)
+    val |= (spp << 8)
+
+    # MPIE(7), SPIE(5), MIE(3), SIE(1) - all writable
+    for bit in [7, 5, 3, 1]:
+        val |= (random.randint(0, 1) << bit)
+
+    # UBE(6) - NutShell is little-endian, keep 0
+    # UIE(0) - not implemented in NutShell (N ext not supported)
+
+    return val & ((1 << 64) - 1)
+
+
 def _nutshell_m_text_startup(p: AsmProgram) -> AsmProgram:
     """
-    [NutShell M-mode] Build the startup sequence. Uses mtvec_handler instead of other_exp.
+    [NutShell M-mode] Build the startup sequence.
+
+    NutShell supports M/S/U modes, so we set both MTVEC and STVEC.
+    MISA in NutShell is read-only, so we skip writing to it.
     """
     p.globl(LBL_START).section(".text")
 
     p.label(LBL_START)
 
-    p.li("x13", "0x800000000084112d")
-    p.csrw(CSR.MISA, "x13")
-
+    # Note: NutShell's MISA is read-only (from CSR.scala line 452)
+    # The write will be ignored but won't cause an exception
+    # Skip MISA write for cleaner output
 
     p.label(LBL_TRAP_VEC_INIT)
+    # Set M-mode trap handler
     p.la("x13", LBL_OTHER_EXP)
-    p.csrw(CSR.MTVEC, "x13", comment="MTVEC")
+    p.csrw(CSR.MTVEC, "x13", comment="MTVEC - M-mode trap handler")
+    # Set S-mode trap handler (NutShell supports S-mode)
+    p.la("x13", LBL_OTHER_EXP_S)
+    p.csrw(CSR.STVEC, "x13", comment="STVEC - S-mode trap handler")
 
     p.label(LBL_MEPC_SETUP)
     p.la("x13", LBL_INIT)
@@ -291,14 +406,75 @@ def _nutshell_m_text_startup(p: AsmProgram) -> AsmProgram:
 
 def _nutshell_m_machine_mode_init(p: AsmProgram) -> AsmProgram:
     """
-    [NutShell M-mode] Machine mode initialization (different MSTATUS value).
+    [NutShell M-mode] Machine mode initialization with randomized MSTATUS and PMP.
+
+    NutShell supports M/S/U modes and has:
+    - SV39 MMU (39-bit virtual address)
+    - 4 PMP entries (pmpaddr0-3, pmpcfg0-3)
+    - No FPU (no F/D extensions)
+    - Supports exception delegation (MEDELEG/MIDELEG)
     """
     p.label(LBL_INIT_ENV)
-    # TODO support more MSTATUS
-    p.li("x26", "0xa00101800")
-    p.csrw(CSR.MSTATUS, "x26", comment="MSTATUS")
+
+    # =========================================================================
+    # Generate randomized MSTATUS for better fuzzing coverage
+    # =========================================================================
+    ms_val = _random_mstatus_nutshell()
+    mpp = (ms_val >> 11) & 0b11
+
+    # Load and write MSTATUS
+    p.li("x26", f"0x{ms_val:016x}")
+    p.csrw(CSR.MSTATUS, "x26", comment=f"MSTATUS (MPP={mpp})")
+
+    # =========================================================================
+    # PMP Configuration (Physical Memory Protection)
+    # =========================================================================
+    # NutShell has 4 PMP entries. Configure PMP to allow full memory access
+    # for S/U modes. This ensures consistent behavior between Spike and DUT.
+    #
+    # NutShell PMP specifics (from CSR.scala):
+    #   - pmpcfg0-3 exist (RV64 uses pmpcfg0 and pmpcfg2 for 8 entries)
+    #   - pmpaddrWmask = "h3fffffff" (32-bit physical address space)
+    #
+    # Strategy: Use NAPOT mode with full coverage
+    #   - pmpaddr0 = all 1s -> NAPOT covering entire address space
+    #   - pmpcfg0 entry 0 = 0x1f (A=NAPOT, X=1, W=1, R=1)
+    p.li("x16", -1)  # All 1s = 0xffffffffffffffff
+    p.csrw(0x3b0, "x16", comment="pmpaddr0 = all 1s (NAPOT full coverage)")
+    p.li("x16", 0x1f)  # Entry 0: A=NAPOT(11), X=1, W=1, R=1
+    p.csrw(0x3a0, "x16", comment="pmpcfg0: entry 0 = NAPOT+RWX")
+    p.li("x16", 0x0)
+    p.csrw(0x3a2, "x16", comment="pmpcfg2 = 0 (disable remaining entries)")
+
+    # =========================================================================
+    # Exception Delegation Configuration
+    # =========================================================================
+    # Initialize MEDELEG/MIDELEG to zero for consistent behavior
+    # This ensures all exceptions are handled in M-mode
     p.li("x26", "0x0")
-    p.csrw(CSR.MIE, "x26", comment="MIE")
+    p.csrw(CSR.MEDELEG, "x26", comment="MEDELEG - no delegation to S-mode")
+    p.csrw(CSR.MIDELEG, "x26", comment="MIDELEG - no delegation to S-mode")
+    p.csrw(CSR.MIE, "x26", comment="MIE - disable all interrupts")
+
+    # =========================================================================
+    # Initialize scratch/trap-value CSRs to zero for cosim state synchronization
+    # =========================================================================
+    # Machine-level scratch and trap value registers:
+    p.csrw(CSR.MSCRATCH, "x26", comment="MSCRATCH - init to 0 for cosim sync")
+    p.csrw(CSR.MTVAL, "x26", comment="MTVAL - init to 0 for cosim sync")
+    p.csrw(CSR.MCAUSE, "x26", comment="MCAUSE - init to 0 for cosim sync")
+
+    # Supervisor-level scratch and trap value registers (NutShell supports S-mode):
+    p.csrw(CSR.SSCRATCH, "x26", comment="SSCRATCH - init to 0 for cosim sync")
+    p.csrw(CSR.STVAL, "x26", comment="STVAL - init to 0 for cosim sync")
+    p.csrw(CSR.SCAUSE, "x26", comment="SCAUSE - init to 0 for cosim sync")
+    p.csrw(CSR.SEPC, "x26", comment="SEPC - init to 0 for cosim sync")
+    # =========================================================================
+
+    # Flush TLB if not returning to M-mode (required for consistent MMU state)
+    if mpp != 3:
+        p.instr("sfence.vma", "x0", "x0")
+
     p.mret()
     return p
 
@@ -356,12 +532,17 @@ def _s_mode_pmp_setup(p: AsmProgram) -> AsmProgram:
     """
     [S-mode] Build PMP (Physical Memory Protection) setup.
     Use NAPOT mode to cover entire address space (including mem_region for AMO instructions).
+
+    In RV64: pmpcfg0 (entries 0-7), pmpcfg2 (entries 8-15).
+    pmpcfg1/pmpcfg3 do NOT exist in RV64.
     """
     p.label(LBL_PMP_SETUP)
     p.li("x16", -1)  # All 1s = 0xffffffffffffffff
-    p.csrw(0x3b0, "x16")  # pmpaddr0
+    p.csrw(0x3b0, "x16", comment="pmpaddr0 = all 1s (NAPOT full coverage)")
     p.li("x16", 0x1f)  # NAPOT + RWX
-    p.csrw(0x3a0, "x16")  # pmpcfg0
+    p.csrw(0x3a0, "x16", comment="pmpcfg0: entry 0 = NAPOT+RWX")
+    p.li("x16", 0x0)
+    p.csrw(0x3a2, "x16", comment="pmpcfg2 = 0 (disable entries 8-15)")
     p.instr("sfence.vma")
     return p
 
@@ -420,6 +601,8 @@ def _s_mode_init_sequence(p: AsmProgram) -> AsmProgram:
     else:
         rm = random.choice(minor_modes)
     p.instr("fsrmi", str(rm))
+    # Clear fflags - RISC-V spec doesn't mandate reset value, software must clear
+    p.instr("csrwi", "fflags", "0")
 
     # === General-purpose register initialization with random values ===
     # Initialize x1-x31 (x0 is hardwired to 0)
@@ -590,12 +773,17 @@ def _u_mode_pmp_setup(p: AsmProgram) -> AsmProgram:
     """
     [U-mode] Build PMP setup.
     Use NAPOT mode to cover entire address space (including mem_region for AMO instructions).
+
+    In RV64: pmpcfg0 (entries 0-7), pmpcfg2 (entries 8-15).
+    pmpcfg1/pmpcfg3 do NOT exist in RV64.
     """
     p.label(LBL_PMP_SETUP)
     p.li("x29", -1)  # All 1s = 0xffffffffffffffff
-    p.csrw(0x3b0, "x29")  # pmpaddr0
+    p.csrw(0x3b0, "x29", comment="pmpaddr0 = all 1s (NAPOT full coverage)")
     p.li("x29", 0x1f)  # NAPOT + RWX
-    p.csrw(0x3a0, "x29")  # pmpcfg0
+    p.csrw(0x3a0, "x29", comment="pmpcfg0: entry 0 = NAPOT+RWX")
+    p.li("x29", 0x0)
+    p.csrw(0x3a2, "x29", comment="pmpcfg2 = 0 (disable entries 8-15)")
     return p
 
 
@@ -1011,19 +1199,51 @@ def _cva6_init(p: AsmProgram) -> AsmProgram:
     p.li("x26", f"0x{ms_val:016x}")
     p.csrw(CSR.MSTATUS, "x26", comment=f"MSTATUS (MPP={mpp})")
 
-    # PMP setup for non-M-mode execution
-    # CVA6 has 8 PMP entries
+    # PMP setup - CVA6 has 8 PMP entries
     # Use NAPOT mode to cover entire address space (including mem_region for AMO instructions)
+    #
+    # In RV64, PMP configuration registers layout:
+    #   - pmpcfg0 (0x3a0): configures entries 0-7 (8 bytes, 1 byte per entry)
+    #   - pmpcfg2 (0x3a2): configures entries 8-15
+    #   - pmpcfg1/pmpcfg3 do NOT exist in RV64 (only in RV32)
+    #
+    # Strategy:
+    #   1. pmpaddr0 = all 1s for NAPOT covering entire address space
+    #   2. pmpcfg0 entry 0 = 0x1f (NAPOT mode, RWX permissions)
+    #   3. Clear pmpcfg2 to disable entries 8-15
+    #
+    # Note: PMP is always set to ensure consistent state between Spike and DUT.
+    p.li("x16", -1)  # All 1s = 0xffffffffffffffff
+    p.csrw(0x3b0, "x16", comment="pmpaddr0 = all 1s (NAPOT full coverage)")
+    p.li("x16", 0x1f)  # Entry 0: A=NAPOT(11), X=1, W=1, R=1
+    p.csrw(0x3a0, "x16", comment="pmpcfg0: entry 0 = NAPOT+RWX")
+    p.li("x16", 0x0)
+    p.csrw(0x3a2, "x16", comment="pmpcfg2 = 0 (disable entries 8-15)")
     if mpp != 3:
-        p.li("x16", -1)  # All 1s = 0xffffffffffffffff
-        p.csrw(0x3b0, "x16")  # pmpaddr0
-        p.li("x16", 0x1f)  # NAPOT + RWX
-        p.csrw(0x3a0, "x16")  # pmpcfg0
         p.instr("sfence.vma", "x0", "x0")
 
-    # Disable interrupts
+    # Initialize exception delegation registers to ensure consistency
+    # between Spike and DUT. Without this, random CSR writes to
+    # medeleg/mideleg can cause Spike and DUT to use different trap vectors.
     p.li("x26", "0x0")
+    p.csrw(CSR.MEDELEG, "x26", comment="MEDELEG - no delegation to S-mode")
+    p.csrw(CSR.MIDELEG, "x26", comment="MIDELEG - no delegation to S-mode")
     p.csrw(CSR.MIE, "x26", comment="MIE")
+
+    # =========================================================================
+    # Initialize scratch/trap-value CSRs to zero for cosim state synchronization
+    # =========================================================================
+    # Machine-level scratch and trap value registers:
+    p.csrw(CSR.MSCRATCH, "x26", comment="MSCRATCH - init to 0 for cosim sync")
+    p.csrw(CSR.MTVAL, "x26", comment="MTVAL - init to 0 for cosim sync")
+    p.csrw(CSR.MCAUSE, "x26", comment="MCAUSE - init to 0 for cosim sync")
+    # Supervisor-level scratch and trap value registers:
+    p.csrw(CSR.SSCRATCH, "x26", comment="SSCRATCH - init to 0 for cosim sync")
+    p.csrw(CSR.STVAL, "x26", comment="STVAL - init to 0 for cosim sync")
+    p.csrw(CSR.SCAUSE, "x26", comment="SCAUSE - init to 0 for cosim sync")
+    p.csrw(CSR.SEPC, "x26", comment="SEPC - init to 0 for cosim sync")
+    # =========================================================================
+
     p.mret()
 
     return p
@@ -1055,6 +1275,8 @@ def _cva6_init_reg(p: AsmProgram) -> AsmProgram:
         rm = random.choice(minor_modes)
 
     p.instr("fsrmi", str(rm))
+    # Clear fflags - RISC-V spec doesn't mandate reset value, software must clear
+    p.instr("csrwi", "fflags", "0")
 
     # === General-purpose and floating-point register initialization ===
     # CVA6 only supports F and D extensions, NOT Zfh
@@ -1144,24 +1366,84 @@ def _random_mstatus_cva6():
 def _cva6_exception_vector(p: AsmProgram) -> AsmProgram:
     """
     [CVA6] Exception handlers for M-mode and S-mode.
-    Similar to XiangShan but adapted for CVA6.
+
+    This handler correctly distinguishes between interrupts and exceptions:
+    - Interrupts (mcause[63]=1): Disable all interrupts (MIE=0) to prevent
+      interrupt storm, then return. This is necessary because random CSR
+      instructions may enable timer interrupts, which fire continuously
+      since we don't clear the interrupt source (mtimecmp).
+    - Exceptions (mcause[63]=0): Skip the faulting instruction (mepc+=4)
+      and return to continue execution.
+
+    Register usage (all caller-saved, safe to clobber):
+    - x13 (a3): mepc/sepc value, scratch
+    - x14 (a4): mcause/scause value
+    - x15 (a5): scratch for comparisons
     """
+    # =========================================================================
     # M-mode trap handler
+    # =========================================================================
     p.label(LBL_OTHER_EXP)
     p.option("norvc")
+
+    # Read mcause to determine if this is an interrupt or exception
+    p.csrr("x14", CSR.MCAUSE)
+
+    # Check if interrupt (mcause[63] == 1)
+    # For RV64: if mcause < 0 (signed), it's an interrupt
+    p.instr("blt", "x14", "x0", "m_handle_interrupt")
+
+    # --- Exception path: skip the faulting instruction ---
     p.csrr("x13", CSR.MEPC)
     p.instr("addi", "x13", "x13", "4")
     p.csrw(CSR.MEPC, "x13")
     p.mret()
+
+    # --- Interrupt path: disable interrupts to prevent storm ---
+    p.label("m_handle_interrupt")
+    # Disable all machine interrupts by clearing MIE
+    p.li("x15", "0")
+    p.csrw(CSR.MIE, "x15")
+    # Also clear MSTATUS.MIE bit (bit 3) to globally disable M-mode interrupts
+    # Read MSTATUS, clear bit 3, write back
+    p.csrr("x13", CSR.MSTATUS)
+    p.li("x15", "-9")  # -9 = 0xFFFFFFFFFFFFFFF7, mask to clear bit 3
+    p.instr("and", "x13", "x13", "x15")
+    p.csrw(CSR.MSTATUS, "x13")
+    p.mret()
+
     p.option("rvc")
 
+    # =========================================================================
     # S-mode trap handler
+    # =========================================================================
     p.label(LBL_OTHER_EXP_S)
     p.option("norvc")
+
+    # Read scause to determine if this is an interrupt or exception
+    p.csrr("x14", CSR.SCAUSE)
+
+    # Check if interrupt (scause[63] == 1)
+    p.instr("blt", "x14", "x0", "s_handle_interrupt")
+
+    # --- Exception path: skip the faulting instruction ---
     p.csrr("x13", CSR.SEPC)
     p.instr("addi", "x13", "x13", "4")
     p.csrw(CSR.SEPC, "x13")
     p.instr("sret")
+
+    # --- Interrupt path: disable interrupts to prevent storm ---
+    p.label("s_handle_interrupt")
+    # Disable all supervisor interrupts by clearing SIE
+    p.li("x15", "0")
+    p.csrw(CSR.SIE, "x15")
+    # Also clear SSTATUS.SIE bit (bit 1)
+    p.csrr("x13", CSR.SSTATUS)
+    p.li("x15", "-3")  # -3 = 0xFFFFFFFFFFFFFFFD, mask to clear bit 1
+    p.instr("and", "x13", "x13", "x15")
+    p.csrw(CSR.SSTATUS, "x13")
+    p.instr("sret")
+
     p.option("rvc")
 
     return p
@@ -1232,6 +1514,13 @@ def _common_main_with_hook(p: AsmProgram) -> AsmProgram:
 def _common_support_routines(p: AsmProgram) -> AsmProgram:
     """
     [Common] Helper routines: write_tohost/_exit, debug_rom/debug_exception/instr_end.
+
+    Note: After writing to tohost, we use a NOP buffer instead of jumping back
+    to write_tohost. This prevents false positives in differential testing where
+    Spike stops immediately after writing tohost but CVA6 continues executing
+    a few more instructions before stopping. With NOP buffer, even if CVA6
+    executes extra instructions, they are just NOPs and won't cause meaningful
+    trace differences.
     """
     p.label(LBL_WRITE_TOHOST)
     p.la("t1", SYM_TOHOST)
@@ -1239,7 +1528,11 @@ def _common_support_routines(p: AsmProgram) -> AsmProgram:
     p.sw("t2", "0(t1)")
 
     p.label(LBL_EXIT)
-    p.instr("j", LBL_WRITE_TOHOST)
+    # NOP buffer to absorb trace termination timing differences between simulators
+    # If simulation doesn't stop after tohost write, it will loop in this NOP region
+    for _ in range(16):
+        p.instr("nop")
+    p.instr("j", LBL_EXIT)
 
     p.label(LBL_DEBUG_ROM); p.dret()
     p.label(LBL_DEBUG_EXC); p.dret()
@@ -1388,11 +1681,361 @@ def build_template_cva6(arch: ArchConfig) -> AsmProgram:
     return p
 
 
+# ------------------------------------------------------------------------------
+# BOOM Private Functions (_boom_*)
+# BOOM Config: RV64GC (I/M/A/F/D/C), NO Zfh/B/ZK
+# Similar to CVA6 but without B and ZK extensions
+# ------------------------------------------------------------------------------
+
+def _random_mstatus_boom():
+    """
+    Generate random MSTATUS value for BOOM.
+
+    BOOM Config:
+    - RV64 (XLEN=64)
+    - No H extension (RVH=0)
+    - Supports M/S/U modes
+    - Has MMU (SV39)
+    - No V extension
+    """
+    val = 0
+
+    # SD(63) - derived by hardware, keep 0
+
+    # SXL[1:0] (35-34) & UXL[1:0] (33-32)
+    # For RV64: 2 means 64-bit
+    sxl = 2  # Always 64-bit for BOOM
+    uxl = 2
+    val |= (sxl << 34)
+    val |= (uxl << 32)
+
+    # TSR(22), TW(21), TVM(20), MXR(19), SUM(18), MPRV(17)
+    for bit in [22, 21, 20, 19, 18, 17]:
+        val |= (random.randint(0, 1) << bit)
+
+    # XS[1:0] (16-15), FS[1:0] (14-13)
+    # BOOM has F/D extensions, so FS can be non-zero
+    # IMPORTANT: FS must NOT be 0, otherwise FP instructions cause illegal instruction exceptions
+    xs = random.randint(0, 3)
+    fs = random.randint(1, 3)  # Never Off, always enable FP
+    val |= (xs << 15)
+    val |= (fs << 13)
+
+    # VS[1:0] (10-9) - BOOM has no V extension
+    vs = 0
+    val |= (vs << 9)
+
+    # MPP[1:0] (12-11): legal values 0 (U), 1 (S), 3 (M)
+    mpp = random.choice([0, 1, 3])
+    val |= (mpp << 11)
+
+    # SPP(8), MPIE(7), UBE(6), SPIE(5), MIE(3), SIE(1)
+    for bit in [8, 7, 5, 3, 1]:
+        val |= (random.randint(0, 1) << bit)
+
+    # UBE(6) - BOOM is little-endian, keep 0
+
+    return val & ((1 << 64) - 1)
+
+
+def _boom_text_startup(p: AsmProgram) -> AsmProgram:
+    """
+    [BOOM] Build the startup sequence in .text.init.
+    BOOM uses standard RISC-V privilege architecture.
+
+    NOTE: We use .text.init instead of .text to ensure code is placed
+    at 0x80000000 first, matching Chipyard's memory preload mechanism.
+    """
+    p.globl(LBL_START).section(".text.init")
+
+    p.label(LBL_START)
+
+    # BOOM's MISA is read-only, just setup trap vectors
+    p.label(LBL_TRAP_VEC_INIT)
+    p.la("x13", LBL_OTHER_EXP)
+    p.csrw(CSR.MTVEC, "x13", comment="MTVEC")
+    p.la("x13", LBL_OTHER_EXP_S)
+    p.csrw(CSR.STVEC, "x13", comment="STVEC")
+
+    p.label(LBL_MEPC_SETUP)
+    p.la("x13", LBL_INIT)
+    p.csrw(CSR.MEPC, "x13")
+
+    return p
+
+
+def _boom_init(p: AsmProgram) -> AsmProgram:
+    """
+    [BOOM] Mode initialization:
+    - Write MSTATUS/MIE/PMP
+    - Enter init via mret
+
+    BOOM supports M/S/U modes with SV39 MMU.
+    """
+    p.label(LBL_INIT_ENV)
+
+    # Generate random MSTATUS for BOOM
+    ms_val = _random_mstatus_boom()
+    mpp = (ms_val >> 11) & 0b11
+
+    # Load and write MSTATUS
+    p.li("x26", f"0x{ms_val:016x}")
+    p.csrw(CSR.MSTATUS, "x26", comment=f"MSTATUS (MPP={mpp})")
+
+    # PMP setup - BOOM has 8 PMP entries
+    # Configure PMP to allow full memory access for S/U mode.
+    #
+    # In RV64, PMP configuration registers layout:
+    #   - pmpcfg0 (0x3a0): configures entries 0-7 (8 bytes, 1 byte per entry)
+    #   - pmpcfg2 (0x3a2): configures entries 8-15
+    #   - pmpcfg1/pmpcfg3 do NOT exist in RV64 (only in RV32)
+    #
+    # Strategy:
+    #   1. Set pmpaddr0 = all 1s for NAPOT covering entire address space
+    #   2. Set pmpcfg0 entry 0 = 0x1f (NAPOT mode, RWX permissions)
+    #   3. Clear pmpcfg2 to disable entries 8-15
+    #
+    # Note: PMP is always set (even in M-mode) to ensure consistent state
+    # and prevent random CSR instructions from causing unexpected behavior.
+    p.li("x16", -1)  # All 1s = 0xffffffffffffffff
+    p.csrw(0x3b0, "x16", comment="pmpaddr0 = all 1s (NAPOT full coverage)")
+    p.li("x16", 0x1f)  # Entry 0: A=NAPOT(11), X=1, W=1, R=1
+    p.csrw(0x3a0, "x16", comment="pmpcfg0: entry 0 = NAPOT+RWX")
+    p.li("x16", 0x0)
+    p.csrw(0x3a2, "x16", comment="pmpcfg2 = 0 (disable entries 8-15)")
+    if mpp != 3:
+        p.instr("sfence.vma", "x0", "x0")
+
+    # Initialize exception delegation registers to ensure consistency
+    # between Spike and DUT (BOOM). Without this, random CSR writes to
+    # medeleg/mideleg can cause Spike and DUT to use different trap vectors.
+    p.li("x26", "0x0")
+    p.csrw(CSR.MEDELEG, "x26", comment="MEDELEG - no delegation to S-mode")
+    p.csrw(CSR.MIDELEG, "x26", comment="MIDELEG - no delegation to S-mode")
+    p.csrw(CSR.MIE, "x26", comment="MIE")
+
+    # =========================================================================
+    # Initialize scratch/trap-value CSRs to zero for cosim state synchronization
+    # =========================================================================
+    # These CSRs have implementation-defined reset values. Spike may have
+    # non-zero initial values while BOOM initializes them to 0. This causes
+    # cosim mismatches when these CSRs are first read. Explicitly initializing
+    # them ensures consistent state between Spike and BOOM.
+    #
+    # Machine-level scratch and trap value registers:
+    p.csrw(CSR.MSCRATCH, "x26", comment="MSCRATCH - init to 0 for cosim sync")
+    p.csrw(CSR.MTVAL, "x26", comment="MTVAL - init to 0 for cosim sync")
+    p.csrw(CSR.MCAUSE, "x26", comment="MCAUSE - init to 0 for cosim sync")
+    #
+    # Supervisor-level scratch and trap value registers:
+    p.csrw(CSR.SSCRATCH, "x26", comment="SSCRATCH - init to 0 for cosim sync")
+    p.csrw(CSR.STVAL, "x26", comment="STVAL - init to 0 for cosim sync")
+    p.csrw(CSR.SCAUSE, "x26", comment="SCAUSE - init to 0 for cosim sync")
+    p.csrw(CSR.SEPC, "x26", comment="SEPC - init to 0 for cosim sync")
+    # =========================================================================
+
+    p.mret()
+
+    return p
+
+
+def _boom_init_reg(p: AsmProgram) -> AsmProgram:
+    """
+    [BOOM] Initialize floating-point and general-purpose registers.
+
+    IMPORTANT: BOOM does NOT support Zfh extension, so we only use:
+    - fmv.w.x (single precision, F extension)
+    - fmv.d.x (double precision, D extension)
+
+    NO fmv.h.x (half precision, Zfh extension)!
+    """
+    p.label(LBL_INIT)
+
+    # Set floating-point rounding mode
+    major_modes = [0, 1, 2, 3, 4]
+    minor_modes = [5, 6, 7]
+
+    if random.random() < 0.95:
+        rm = random.choice(major_modes)
+    else:
+        rm = random.choice(minor_modes)
+
+    p.instr("fsrmi", str(rm))
+    # Clear fflags - RISC-V spec doesn't mandate reset value, software must clear
+    p.instr("csrwi", "fflags", "0")
+
+    # === General-purpose register initialization ===
+    # Initialize ALL x1-x31 (x0 is hardwired to 0)
+    for r in range(1, 32):
+        rand_val = random.getrandbits(64)
+        p.li(f"x{r}", f"0x{rand_val:016x}")
+
+    # === Floating-point register initialization ===
+    # BOOM: Only use fmv.w.x or fmv.d.x (NO fmv.h.x!)
+    for r in range(32):
+        rand_val = random.getrandbits(64)
+        p.li("x5", f"0x{rand_val:016x}")  # Use t0 as temp register
+        op = random.choice(["fmv.w.x", "fmv.d.x"])
+        p.instr(op, f"f{r}", "x5")
+
+    # Setup memory region pointer for Store/Load operations
+    p.la("t6", SYM_MEM_REGION)
+    p.li("t5", "4096")
+    p.instr("add", "t6", "t6", "t5")
+
+    p.instr("j", LBL_MAIN)
+
+    p.align(12)
+    return p
+
+
+def _boom_exception_vector(p: AsmProgram) -> AsmProgram:
+    """
+    [BOOM] Exception handlers for M-mode and S-mode.
+
+    Similar to CVA6, handles both interrupts and exceptions:
+    - Interrupts: Disable all interrupts to prevent storm, then return
+    - Exceptions: Skip the faulting instruction and continue
+    """
+    # =========================================================================
+    # M-mode trap handler
+    # =========================================================================
+    p.label(LBL_OTHER_EXP)
+    p.option("norvc")
+
+    # Read mcause to determine if this is an interrupt or exception
+    p.csrr("x14", CSR.MCAUSE)
+
+    # Check if interrupt (mcause[63] == 1)
+    p.instr("blt", "x14", "x0", "m_handle_interrupt_boom")
+
+    # --- Exception path: skip the faulting instruction ---
+    p.csrr("x13", CSR.MEPC)
+    p.instr("addi", "x13", "x13", "4")
+    p.csrw(CSR.MEPC, "x13")
+    p.mret()
+
+    # --- Interrupt path: disable interrupts to prevent storm ---
+    p.label("m_handle_interrupt_boom")
+    p.li("x15", "0")
+    p.csrw(CSR.MIE, "x15")
+    p.csrr("x13", CSR.MSTATUS)
+    p.li("x15", "-9")  # Mask to clear bit 3 (MIE)
+    p.instr("and", "x13", "x13", "x15")
+    p.csrw(CSR.MSTATUS, "x13")
+    p.mret()
+
+    p.option("rvc")
+
+    # =========================================================================
+    # S-mode trap handler
+    # =========================================================================
+    p.label(LBL_OTHER_EXP_S)
+    p.option("norvc")
+
+    p.csrr("x14", CSR.SCAUSE)
+    p.instr("blt", "x14", "x0", "s_handle_interrupt_boom")
+
+    # --- Exception path ---
+    p.csrr("x13", CSR.SEPC)
+    p.instr("addi", "x13", "x13", "4")
+    p.csrw(CSR.SEPC, "x13")
+    p.instr("sret")
+
+    # --- Interrupt path ---
+    p.label("s_handle_interrupt_boom")
+    p.li("x15", "0")
+    p.csrw(CSR.SIE, "x15")
+    p.csrr("x13", CSR.SSTATUS)
+    p.li("x15", "-3")  # Mask to clear bit 1 (SIE)
+    p.instr("and", "x13", "x13", "x15")
+    p.csrw(CSR.SSTATUS, "x13")
+    p.instr("sret")
+
+    p.option("rvc")
+
+    return p
+
+
+def _boom_data_sections(p: AsmProgram) -> AsmProgram:
+    """
+    [BOOM] Data area and custom sections.
+    """
+    p.section(".data")
+    p.directive("align", "6")
+    p.directive("global", SYM_TOHOST)
+    p.label(SYM_TOHOST)
+    if p.arch.is_rv64():
+        p.data_dword(0)
+    else:
+        p.data_word(0, 0)
+
+    p.directive("align", "6")
+    p.directive("global", SYM_FROMHOST)
+    p.label(SYM_FROMHOST)
+    if p.arch.is_rv64():
+        p.data_dword(0)
+    else:
+        p.data_word(0, 0)
+
+    p.section(".region_0", flags="aw", sect_type="@progbits")
+    p.label(SYM_REGION0)
+    rand_words = [f"0x{random.getrandbits(32):08x}" for _ in range(8)]
+    p.data_word(*rand_words)
+
+    # Memory region for load/store operations
+    p.section(".mem_region", flags="aw", sect_type="@progbits")
+    p.align(4)
+    p.label(SYM_MEM_REGION)
+    _init_random_mem_region(p)
+    p.label(SYM_MEM_REGION_END)
+
+    return p
+
+
+def build_template_boom(arch: ArchConfig) -> AsmProgram:
+    """
+    Build complete BOOM template.
+
+    BOOM (Berkeley Out-of-Order Machine) is a synthesizable, parameterized,
+    superscalar RISC-V processor.
+
+    Supported extensions: RV64GC (I/M/A/F/D/C) + Zicsr + Zifencei
+    NOT supported: Zfh/Zfhmin (half-precision FP), V (vector), B (bit manipulation), ZK* (crypto)
+
+    This template runs in M/S/U modes with simple exception handling.
+    """
+    p = AsmProgram(arch=arch)
+
+    # Startup sequence
+    _boom_text_startup(p)
+
+    # Mode initialization
+    _boom_init(p)
+
+    # Register initialization (NO fmv.h.x!)
+    _boom_init_reg(p)
+
+    # Exception handlers
+    _boom_exception_vector(p)
+
+    # Main section with hook
+    _common_main_with_hook(p)
+
+    # Support routines
+    _common_support_routines(p)
+
+    # Data sections
+    _boom_data_sections(p)
+
+    return p
+
+
 def random_mstatus_rv64_h():
     val = 0
 
     # --- High position retention / SD ---
-    # SD(63) is derived from FS/XS/VS by the implementation, 
+    # SD(63) is derived from FS/XS/VS by the implementation,
     # and is kept at 0 here, so that it is more reasonable to let the hardware set it itself.
 
     # --- MPV(39), GVA(38), MBE(37), SBE(36) ---
@@ -1459,6 +2102,7 @@ def build_template(template_type: TemplateType, arch: ArchConfig) -> AsmProgram:
         TemplateType.NUTSHELL: build_template_nutshell,
         TemplateType.ROCKET: build_template_rocket,
         TemplateType.CVA6: build_template_cva6,
+        TemplateType.BOOM: build_template_boom,
         # TemplateType.TESTXS_U_MODE: build_template_testxs_u_mode,
     }
 

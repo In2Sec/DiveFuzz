@@ -139,11 +139,11 @@ class InstructionValidator:
         Pipeline:
         1. Encode instruction to machine code
         2. Parse to extract registers
-        3. Set checkpoint
-        4. Read source values
-        5. Check XOR uniqueness
-        6. Check bug filter
-        7. Execute if valid
+        3. Read source values
+        4. Check XOR uniqueness
+        5. Check bug filter
+        6. Set checkpoint
+        7. Execute instruction
         8. Log and confirm
 
         Args:
@@ -161,31 +161,30 @@ class InstructionValidator:
         opcode, source_regs, dest_regs, immediate = self.parser.parse_instruction_full(instruction)
         actual_bytes = sum(size for _, size in instruction_seq)
 
+        # 3. Read source values (read-only operation, no state change)
+        source_values = [self._read_register(r) for r in source_regs]
+        if immediate is not None:
+            source_values.append(immediate)
+
+        # 4. Check XOR uniqueness (pre-execution, no checkpoint restore needed)
+        xor_value, is_unique = self._check_xor_unique(opcode, source_values)
+        if not is_unique:
+            return False, 0
+
+        # 5. Check bug filter (pre-execution, no checkpoint restore needed)
+        bug_name = self._check_bug(opcode, source_values)
+        if bug_name:
+            return False, 0
+
+        # === All pre-execution checks passed, now execute with checkpoint protection ===
         try:
-            # 3. Set checkpoint
+            # 6. Set checkpoint (only before actual execution)
             if not self.spike_session.checkpoint_set:
                 self.spike_session.set_checkpoint()
 
             # Capture pre-state for debug
             if self._debug_logger_enabled and self._debug_logger:
                 self._debug_logger.capture_pre_state(self.spike_session)
-
-            # 4. Read source values
-            source_values = [self._read_register(r) for r in source_regs]
-            if immediate is not None:
-                source_values.append(immediate)
-
-            # 5. Check XOR uniqueness
-            xor_value, is_unique = self._check_xor_unique(opcode, source_values)
-            if not is_unique:
-                self.spike_session.restore_checkpoint_and_reset()
-                return False, 0
-
-            # 6. Check bug filter
-            bug_name = self._check_bug(opcode, source_values)
-            if bug_name:
-                self.spike_session.restore_checkpoint_and_reset()
-                return False, 0
 
             # 7. Execute instruction
             machine_codes = [mc for mc, _ in instruction_seq]

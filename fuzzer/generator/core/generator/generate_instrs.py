@@ -41,6 +41,56 @@ from ...instr_generator.label_manager import LabelManager
 from ...config.config_manager import MAX_MUTATE_TIME
 
 
+def execute_sequence_with_checkpoint(
+    spike_session,
+    codes: List[int],
+    sizes: List[int],
+    max_steps: int = 10000
+) -> bool:
+    """
+    Execute a sequence with checkpoint protection.
+
+    This function provides safe execution of instruction sequences (forward jumps,
+    backward loops, indirect jumps) by properly managing checkpoint state.
+
+    When execute_sequence fails mid-way (e.g., due to trap handler issues),
+    the PC may have moved but next_instruction_addr_ wasn't updated.
+    This causes "PC mismatch" errors on subsequent executions.
+
+    By setting checkpoint before and restoring on failure, we ensure:
+    1. PC and next_instruction_addr_ stay synchronized
+    2. Register/memory state is properly rolled back
+    3. Subsequent instructions can execute correctly
+
+    Args:
+        spike_session: The SpikeSession instance
+        codes: Machine codes to execute
+        sizes: Instruction sizes (2 or 4 bytes each)
+        max_steps: Maximum execution steps (safety limit)
+
+    Returns:
+        True if execution succeeded, False otherwise
+    """
+    try:
+        # Set checkpoint before executing
+        spike_session.set_checkpoint()
+
+        # Execute the sequence
+        spike_session.execute_sequence(codes, sizes, max_steps)
+
+        # Confirm successful execution (clears checkpoint_set flag)
+        spike_session.confirm_instruction()
+        return True
+
+    except Exception:
+        # Restore checkpoint to sync PC and next_instruction_addr_
+        try:
+            spike_session.restore_checkpoint_and_reset()
+        except Exception:
+            pass
+        return False
+
+
 def generate_forward_jump_instrs(
     jump_instr: str,
     target_distance: int,
@@ -201,7 +251,6 @@ def generate_loop_body_instrs(
 def generate_instructions(instr_number: int,
                           seed_times: int,
                           eliminate_enable: bool,
-                          is_cva6: bool,
                           is_rv32: bool,
                           arch: ArchConfig,
                           template_type: str,
@@ -216,7 +265,6 @@ def generate_instructions(instr_number: int,
         instr_number: Number of instructions to generate
         seed_times: Seed index (used for filename)
         eliminate_enable: Enable conflict elimination via Spike
-        is_cva6: Target CVA6 processor
         is_rv32: Use RV32 architecture
         arch: Architecture configuration for template creation
         template_type: Template type name
@@ -365,10 +413,14 @@ def generate_instructions(instr_number: int,
         actual_bytes = 0
         # Track logical instruction index (for user-requested instruction count)
         logical_instr_index = 0
+        # Track total instruction selection retries to avoid infinite loops
+        # when bug_filter blocks certain instruction types
+        total_instr_retry = 0
+        MAX_TOTAL_INSTR_RETRY = instr_number * 100  # Allow up to 100x retries per instruction
 
         # Use while loop to properly track actual bytes
         # (for loop index cannot be modified in Python)
-        while logical_instr_index < instr_number and actual_bytes < max_bytes:
+        while logical_instr_index < instr_number and actual_bytes < max_bytes and total_instr_retry < MAX_TOTAL_INSTR_RETRY:
             is_c_extension = False
 
             # Unified extension selection based on configuration and probabilities
@@ -454,13 +506,14 @@ def generate_instructions(instr_number: int,
                                     compiled_seq = encoder.compile_backward_loop(
                                         init_instr, loop_body, decr_instr, branch_instr, label
                                     )
-                                    # Execute the loop sequence using unified execute_sequence
-                                    # max_steps = loop_iterations * (body + decr + branch) + init
-                                    max_steps = loop_iterations * (len(loop_body) + 2) + 2
-                                    spike_session.execute_sequence(compiled_seq.codes, compiled_seq.sizes, max_steps)
-                                except Exception as e:
-                                    # If execution fails, just continue with assembly output
-                                    pass
+                                except Exception:
+                                    compiled_seq = None
+
+                                # Execute with checkpoint protection if compilation succeeded
+                                if compiled_seq is not None:
+                                    execute_sequence_with_checkpoint(
+                                        spike_session, compiled_seq.codes, compiled_seq.sizes
+                                    )
 
                             # Append to output with labels (for assembly file readability)
                             entire_instrs.append(init_instr)
@@ -512,10 +565,14 @@ def generate_instructions(instr_number: int,
                                     compiled_seq = encoder.compile_forward_jump(
                                         jump_instr, middle_instrs, label
                                     )
-                                    spike_session.execute_sequence(compiled_seq.codes, compiled_seq.sizes)
-                                except Exception as e:
-                                    # If execution fails, just continue with assembly output
-                                    pass
+                                except Exception:
+                                    compiled_seq = None
+
+                                # Execute with checkpoint protection if compilation succeeded
+                                if compiled_seq is not None:
+                                    execute_sequence_with_checkpoint(
+                                        spike_session, compiled_seq.codes, compiled_seq.sizes
+                                    )
 
                             # Append to output with labels
                             # IMPORTANT: Use actual offset from compiled_seq instead of label reference
@@ -587,9 +644,14 @@ def generate_instructions(instr_number: int,
                                     middle_instrs,
                                     label
                                 )
-                                spike_session.execute_sequence(compiled_seq.codes, compiled_seq.sizes)
-                            except Exception as e:
-                                pass
+                            except Exception:
+                                compiled_seq = None
+
+                            # Execute with checkpoint protection if compilation succeeded
+                            if compiled_seq is not None:
+                                execute_sequence_with_checkpoint(
+                                    spike_session, compiled_seq.codes, compiled_seq.sizes
+                                )
 
                         # Append to output with labels
                         # IMPORTANT: Use actual auipc+addi from compiled_seq instead of 'la' pseudo-instruction
@@ -651,9 +713,11 @@ def generate_instructions(instr_number: int,
                             # Update statistics
                             if mutate_time >= MAX_MUTATE_TIME:
                                 resolve_duplicates_fail += 1
-                                # Skip this instruction since validation failed
-                                logical_instr_index += 1
-                                continue
+                                # STRICT bug_filter enforcement:
+                                # Don't skip slot - re-select a different instruction type instead
+                                # This ensures blocked instructions (e.g., sc.w, lr.d, amo*) are never generated
+                                total_instr_retry += 1
+                                continue  # Re-iterate outer loop to select different instruction type
                             else:
                                 resolve_duplicates += 1
                                 # Update actual bytes with the bytes from validator
@@ -704,6 +768,12 @@ def generate_instructions(instr_number: int,
 
             entire_instrs.append(complete_instr)
             logical_instr_index += 1
+
+        # Check if we hit the retry limit (indicates too many blocked instructions)
+        if total_instr_retry >= MAX_TOTAL_INSTR_RETRY:
+            print(f"[Seed {seed_times}] WARNING: Hit max instruction retry limit ({MAX_TOTAL_INSTR_RETRY}). "
+                  f"Generated {logical_instr_index}/{instr_number} instructions. "
+                  f"Check if too many instruction types are blocked by bug_filter.")
 
         # Pad with NOPs to match the NOP template layout
         # This ensures the assembly file compiles to the same memory layout as the spike template

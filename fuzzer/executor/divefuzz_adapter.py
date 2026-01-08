@@ -80,7 +80,6 @@ def run_divefuzz(seed_config: GeneratedSeedConfig, seed_config_logger) -> list:
             instr_number=seed_config.divefuzz.ins_num,
             seed_times=seed_config.divefuzz.seeds_num,
             eliminate_enable=seed_config.divefuzz.dive_enable,
-            is_cva6=seed_config.divefuzz.is_cva6,
             is_rv32=seed_config.divefuzz.is_rv32,
             max_workers=seed_config.divefuzz.threads,
             arch=_divefuzz_config.arch,

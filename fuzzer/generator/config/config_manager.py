@@ -41,7 +41,6 @@ class Config:
         self.mutation_enable = bool(args.mutation)
         self.generate_enable = bool(args.generate)
         self.eliminate_enable = bool(args.eliminate_enable)
-        self.is_cva6 = bool(args.cva6)
         self.is_rv32 = bool(args.rv32)
 
         # Use command line arguments directly (no auto-override)

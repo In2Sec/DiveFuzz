@@ -12,9 +12,9 @@
 # See the Mulan PSL v2 for more details.
 
 """
-NutShell Known Bug Filters
+CVA6 Known Bug Filters
 
-This module defines known bugs found in NutShell processor through DiveFuzz testing.
+This module defines known bugs found in cva6 processor through DiveFuzz testing.
 These filters can be enabled to avoid generating test cases that trigger known bugs.
 
 """
@@ -28,3 +28,4 @@ def register(reg: Registry) -> None:
 
 def register_csr_blacklist(blacklist: CSRBlacklist) -> None:
     pass
+

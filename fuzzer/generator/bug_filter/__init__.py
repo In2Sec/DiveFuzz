@@ -1,25 +1,32 @@
 # Copyright (c) 2024-2025 Institute of Information Engineering, Chinese Academy of Sciences
-# 
+#
 # DiveFuzz is licensed under Mulan PSL v2.
 # You can use this software according to the terms and conditions of the Mulan PSL v2.
 # You may obtain a copy of Mulan PSL v2 at:
 #          http://license.coscl.org.cn/MulanPSL2
-# 
+#
 # THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND,
 # EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT,
 # MERCHANTABILITY OR FIT FOR A PARTICULAR PURPOSE.
-# 
+#
 # See the Mulan PSL v2 for more details.
 
 from .filters import get_known_bugs, match_bug
-from typing import List, Optional
+from typing import List, Optional, Set
 
 class Filter:
     def __init__(self):
         self.registry = {}
+        self.csr_blacklist: Set[str] = set()
 
     def set_architecture(self, architecture: str) -> None:
-        self.registry = get_known_bugs(architecture)
+        """
+        Set the architecture and load corresponding bug patterns and CSR blacklist.
+
+        Args:
+            architecture: Architecture name ('xs', 'nts', 'cva6', etc.)
+        """
+        self.registry, self.csr_blacklist = get_known_bugs(architecture)
 
     def filter_known_bug(self, instr_op: str, source_values: List[int]) -> Optional[str]:
         """
@@ -45,5 +52,27 @@ class Filter:
             # Pattern matches if rs2_value == 0
         """
         return match_bug(self.registry, instr_op, source_values)
+
+    def is_csr_blacklisted(self, csr_name: str) -> bool:
+        """
+        Check if a CSR is in the blacklist.
+
+        Args:
+            csr_name: CSR name (e.g., 'hpmcounter15', 'utvec')
+
+        Returns:
+            True if CSR should be filtered out, False otherwise
+        """
+        return csr_name.lower() in self.csr_blacklist
+
+    def get_csr_blacklist(self) -> Set[str]:
+        """
+        Get the current CSR blacklist.
+
+        Returns:
+            Set of blacklisted CSR names (lowercase)
+        """
+        return self.csr_blacklist.copy()
+
 
 bug_filter = Filter()
