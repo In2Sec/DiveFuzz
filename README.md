@@ -127,7 +127,7 @@ seeds:
   input: divefuzz
   divefuzz:
     # TODO: Only generate seeds, do not deliver to DUT
-    gen_only: false
+    # gen_only: false
     # parallelism
     threads: 128
     # Whether to enable error elimination
