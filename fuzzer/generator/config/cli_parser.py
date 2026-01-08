@@ -32,9 +32,6 @@ def create_parser():
     )
 
     # —— Target Platform / Configuration ——
-    parser.add_argument('--cva6', action='store_true',
-                        help='CVA6 environments'
-    )
     parser.add_argument('--rv32', action='store_true',
                         help='RV32 environments (RV32)'
     )
@@ -42,7 +39,7 @@ def create_parser():
                         help='Enable the constraint "Eliminate identical write-back data" (conflict avoidance)'
     )
     parser.add_argument('--architecture', type=str, default='xs',
-                        choices=['xs', 'nts', 'rkt', 'kmh', 'cva6'],
+                        choices=['xiangshan', 'nutshell', 'rocket', 'cva6', 'boom'],
                         help='Architecture for bug filter'
     )
     parser.add_argument('--allowed-ext-name', choices=allowed_ext.EXT_NAMES, default='general',

@@ -12,11 +12,13 @@
 # See the Mulan PSL v2 for more details.
 
 """
-NutShell Known Bug Filters
+BOOM (Berkeley Out-of-Order Machine) Known Bug Filters
 
-This module defines known bugs found in NutShell processor through DiveFuzz testing.
-These filters can be enabled to avoid generating test cases that trigger known bugs.
+This module defines known bugs and implementation-specific behaviors found in BOOM
+processor through DiveFuzz testing. These filters can be enabled to avoid generating
+test cases that trigger known bugs or cause false positives in differential testing.
 
+BOOM ISA: rv64imafdczicsr_zifencei_zihpm_zicntr
 """
 
 from . import add_bug, add_csr_blacklist, Registry, CSRBlacklist

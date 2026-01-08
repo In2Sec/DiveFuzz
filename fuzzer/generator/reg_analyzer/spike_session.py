@@ -179,7 +179,19 @@ class SpikeSession:
         if not self.initialized:
             raise RuntimeError("Session not initialized. Call initialize() first.")
 
-        return self.engine.execute_sequence(machine_codes, sizes, max_steps)
+        try:
+            return self.engine.execute_sequence(machine_codes, sizes, max_steps)
+        except Exception as e:
+            # Debug output for execution failures
+            pc = self.engine.get_pc() if self.engine else 0
+            print(f"\n[SpikeSession] execute_sequence FAILED:")
+            print(f"  PC: 0x{pc:x}")
+            print(f"  Codes: {[f'0x{c:08x}' for c in machine_codes]}")
+            print(f"  Sizes: {sizes}")
+            print(f"  Error: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def execute_single(self, machine_code: int, size: Optional[int] = None) -> int:
         """
@@ -204,8 +216,17 @@ class SpikeSession:
         """
         if not self.initialized:
             raise RuntimeError("Session not initialized")
-        self.engine.set_checkpoint()
-        self.checkpoint_set = True
+        try:
+            self.engine.set_checkpoint()
+            self.checkpoint_set = True
+        except Exception as e:
+            pc = self.engine.get_pc() if self.engine else 0
+            print(f"\n[SpikeSession] set_checkpoint FAILED:")
+            print(f"  PC: 0x{pc:x}")
+            print(f"  Error: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def confirm_instruction(self):
         """
@@ -229,8 +250,17 @@ class SpikeSession:
         if not self.initialized:
             raise RuntimeError("Session not initialized")
 
-        self.engine.restore_checkpoint()
-        self.checkpoint_set = False
+        try:
+            self.engine.restore_checkpoint()
+            self.checkpoint_set = False
+        except Exception as e:
+            pc = self.engine.get_pc() if self.engine else 0
+            print(f"\n[SpikeSession] restore_checkpoint_and_reset FAILED:")
+            print(f"  PC: 0x{pc:x}")
+            print(f"  Error: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     def get_current_pc(self) -> int:
         """

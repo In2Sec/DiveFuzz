@@ -30,6 +30,9 @@ class TemplateType(Enum):
     # CVA6 templates
     CVA6 = 'cva6'             # CVA6 - RV64GC with B/ZKN, no Zfh
 
+    # BOOM templates
+    BOOM = 'boom'             # BOOM - RV64GC, no Zfh/B/ZK
+
     # TESTXS_U_MODE = 'testxs_u_mode'         # testxs/u_mode.S - User mode with complex page tables
 
 

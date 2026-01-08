@@ -70,7 +70,6 @@ def main():
             config.instr_number,
             config.seed_times,
             config.eliminate_enable,
-            config.is_cva6,
             config.is_rv32,
             config.max_workers,
             config.arch,

@@ -22,7 +22,6 @@ from ...asm_template_manager.riscv_asm_syntex import ArchConfig
 def generate_instructions_parallel(instr_number: int,
                                    seed_times: int,
                                    eliminate_enable: bool,
-                                   is_cva6: bool,
                                    is_rv32: bool,
                                    max_workers: int,
                                    arch: ArchConfig,
@@ -40,7 +39,6 @@ def generate_instructions_parallel(instr_number: int,
         instr_number: Number of instructions per seed
         seed_times: Number of seeds to generate
         eliminate_enable: Enable conflict elimination via Spike
-        is_cva6: Target CVA6 processor
         is_rv32: Use RV32 architecture
         max_workers: Maximum number of parallel processes
         arch: Architecture configuration for template creation
@@ -107,7 +105,6 @@ def generate_instructions_parallel(instr_number: int,
                         instr_number,
                         seed_idx,
                         eliminate_enable,
-                        is_cva6,
                         is_rv32,
                         arch,
                         template_type,
