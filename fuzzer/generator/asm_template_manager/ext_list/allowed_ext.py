@@ -126,8 +126,8 @@ ALLOWED_EXT_NUTSHELL = [
     "RV64_I",         # RV64 specific instructions (e.g., LD, SD, ADDIW)
     "RV_M",           # Multiplication extension
     "RV64_M",         # RV64 multiplication (e.g., MULW, DIVW)
-    # "RV_A",           # Atomic extension
-    # "RV64_A",         # RV64 atomic (e.g., LR.D, SC.D)
+    "RV_A",           # Atomic extension
+    "RV64_A",         # RV64 atomic (e.g., LR.D, SC.D)
     "RV_C",           # Compressed extension (if EnableRVC is set)
     "RV32_C",         # RV32 compressed subset
 ]
