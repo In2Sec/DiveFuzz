@@ -1,7 +1,7 @@
 # Generated Instruction Formats
 
 INSTRUCTION_FORMATS = {
-    "rv_zifencei": {
+    "RV_ZIFENCEI": {
         "fence.i": {
             "format": "fence.i",
             "variables": [],
@@ -95,7 +95,7 @@ INSTRUCTION_FORMATS = {
         }
     },
     # rv32
-    "rv_zbs": {
+    "RV_ZBS": {
         "bclr": {
             "format": "bclr {RD}, {RS1}, {RS2}",
             "variables": [
@@ -134,7 +134,7 @@ INSTRUCTION_FORMATS = {
         }
     },
     # rv32
-    "rv_32B":{
+    "RV_32B":{
         "slo": {
             "format": "slo {RD}, {RS1}, {RS2}",
             "variables": [
