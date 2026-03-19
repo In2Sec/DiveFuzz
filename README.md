@@ -101,6 +101,7 @@ make emu
 
 
 ## Usage Example
+This project is adapted for the **XiangShan** processor developed by the Beijing Institute of Open Source Chip (BOSC). The following examples are based on XiangShan; usage on other CPUs is similar.
 
 `fuzzer/demo.yaml.dev` is the configuration file for DiveFuzz. You can modify it to fit your needs. Then rename it to `your_test.yaml` and place it in the `fuzzer` directory.
 
@@ -188,3 +189,21 @@ DiveFuzz implements a three-tier logging system
 
 3. **Per-seed execution logs**  
    Stored at: `outputs/{configuration_file}-{seed_profile_name}_{seed_basename}.log`, like `outputs/your_test-divefuzz_ins_10_seed_0_.elf.log`
+
+
+
+
+## Affiliation
+
+This project is developed by the Institute of Information Engineering, Chinese Academy of Sciences (CAS).
+
+## Citation
+```
+@inproceedings{guo2025divefuzz,
+  title={DiveFuzz: Enhancing CPU Fuzzing via Diverse Instruction Construction},
+  author={Guo, Zihui and Yuan, Miaomiao and Yang, Yanqi and Chen, Liwei and Shi, Gang and Meng, Dan},
+  booktitle={Proceedings of the 2025 ACM SIGSAC Conference on Computer and Communications Security},
+  pages={1964--1978},
+  year={2025}
+}
+```
