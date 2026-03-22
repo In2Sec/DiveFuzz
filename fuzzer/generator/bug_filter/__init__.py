@@ -11,68 +11,103 @@
 #
 # See the Mulan PSL v2 for more details.
 
-from .filters import get_known_bugs, match_bug
+"""
+DiveFuzz Precision Filter Module
+
+Two-phase filtering with runtime state inspection.
+
+Usage:
+    from bug_filter import (
+        FilterRegistry, FilterResult,
+        pre_execution_filter, post_execution_filter
+    )
+
+    # Create registry
+    registry = FilterRegistry()
+    registry.set_architecture('xs')
+
+    # Add filter using decorator
+    @pre_execution_filter(name="my_filter", opcodes=["div"])
+    def my_filter(ctx):
+        if ctx.get_xpr(1) == 0:
+            return FilterResult.reject("Division by zero")
+        return FilterResult.accept()
+
+    registry.register(my_filter)
+"""
+
 from typing import List, Optional, Set
 
+# Legacy System
+from .filters import get_known_bugs, match_bug
+
+
 class Filter:
+    """Legacy bug filter using pattern matching."""
+
     def __init__(self):
         self.registry = {}
         self.csr_blacklist: Set[str] = set()
 
     def set_architecture(self, architecture: str) -> None:
-        """
-        Set the architecture and load corresponding bug patterns and CSR blacklist.
-
-        Args:
-            architecture: Architecture name ('xs', 'nts', 'cva6', etc.)
-        """
         self.registry, self.csr_blacklist = get_known_bugs(architecture)
 
-    def filter_known_bug(self, instr_op: str, source_values: List[int]) -> Optional[str]:
-        """
-        Check if an instruction triggers a known bug based on source register values
-
-        Matches source register VALUES against bug patterns.
-        Pattern format: (source_pattern1, source_pattern2, ...)
-
-        This check is performed BEFORE instruction execution, using only source
-        register values to filter out instructions that would trigger known bugs.
-
-        Args:
-            instr_op: Instruction opcode (e.g., "div", "sc.w", "csrrw")
-            source_values: Source register VALUES before execution
-
-        Returns:
-            Bug name if instruction matches a known bug pattern, None otherwise
-
-        Example:
-            # Filter division by zero: div rd, rs1, rs2 where rs2=0
-            add_bug(reg, 'div', 'div by zero', '*', '0')
-            # source_values = [rs1_value, rs2_value]
-            # Pattern matches if rs2_value == 0
-        """
-        return match_bug(self.registry, instr_op, source_values)
+    def filter_known_bug(self, opcode: str, source_values: List[int]) -> Optional[str]:
+        return match_bug(self.registry, opcode, source_values)
 
     def is_csr_blacklisted(self, csr_name: str) -> bool:
-        """
-        Check if a CSR is in the blacklist.
-
-        Args:
-            csr_name: CSR name (e.g., 'hpmcounter15', 'utvec')
-
-        Returns:
-            True if CSR should be filtered out, False otherwise
-        """
         return csr_name.lower() in self.csr_blacklist
 
     def get_csr_blacklist(self) -> Set[str]:
-        """
-        Get the current CSR blacklist.
-
-        Returns:
-            Set of blacklisted CSR names (lowercase)
-        """
-        return self.csr_blacklist.copy()
+        return self.csr_blacklist
 
 
 bug_filter = Filter()
+
+
+# Precision Filter System
+from .context import (
+    FilterContext,
+    PreExecutionState,
+    PostExecutionState,
+)
+
+from .base import (
+    FilterPhase,
+    FilterResult,
+    PrecisionFilter,
+    PreExecutionFilter,
+    PostExecutionFilter,
+    FunctionFilter,
+    pre_execution_filter,
+    post_execution_filter,
+    collect_filters_from_caller,
+)
+
+from .registry import (
+    FilterRegistry,
+    create_registry_for_architecture,
+)
+
+
+__all__ = [
+    # Legacy
+    "Filter",
+    "bug_filter",
+    # Core
+    "FilterContext",
+    "PreExecutionState",
+    "PostExecutionState",
+    "FilterPhase",
+    "FilterResult",
+    "PrecisionFilter",
+    "PreExecutionFilter",
+    "PostExecutionFilter",
+    "FunctionFilter",
+    "FilterRegistry",
+    "create_registry_for_architecture",
+    # Decorators
+    "pre_execution_filter",
+    "post_execution_filter",
+    "collect_filters_from_caller",
+]
