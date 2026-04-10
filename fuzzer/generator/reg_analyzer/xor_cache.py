@@ -99,7 +99,7 @@ def compute_xor(values: list) -> int:
     result = 0
     for i, value in enumerate(values):
         result ^= (value << i)
-    return result
+    return result & 0xFFFFFFFFFFFFFFFF
 
 
 # =============================================================================

@@ -29,8 +29,10 @@ from typing import Dict, List, Optional, Tuple, Union, Protocol, runtime_checkab
 
 try:
     from .register_mapping import RegisterMapping
+    from ..asm_template_manager.riscv_asm_syntex.csr import CSR
 except ImportError:
     from register_mapping import RegisterMapping
+    from asm_template_manager.riscv_asm_syntex.csr import CSR
 
 
 # ============================================================================
@@ -67,15 +69,15 @@ class DefaultContextProvider:
     """
 
     # CSR addresses
-    CSR_FRM = 0x002      # Floating-point rounding mode
-    CSR_FCSR = 0x003     # Floating-point control and status
-    CSR_VSTART = 0x008   # Vector start position
-    CSR_VXSAT = 0x009    # Fixed-point saturate flag
-    CSR_VXRM = 0x00A     # Fixed-point rounding mode
-    CSR_VCSR = 0x00F     # Vector control and status
-    CSR_VL = 0xC20       # Vector length
-    CSR_VTYPE = 0xC21    # Vector data type
-    CSR_VLENB = 0xC22    # Vector register length in bytes
+    CSR_FRM = CSR.FRM
+    CSR_FCSR = CSR.FCSR
+    CSR_VSTART = CSR.VSTART
+    CSR_VXSAT = CSR.VXSAT
+    CSR_VXRM = CSR.VXRM
+    CSR_VCSR = CSR.VCSR
+    CSR_VL = CSR.VL
+    CSR_VTYPE = CSR.VTYPE
+    CSR_VLENB = CSR.VLENB
 
     def __init__(self, default_frm: int = 7):
         """

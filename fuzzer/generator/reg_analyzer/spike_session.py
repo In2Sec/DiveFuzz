@@ -161,7 +161,7 @@ class SpikeSession:
         self,
         machine_codes: List[int],
         sizes: List[int],
-        max_steps: int = 10000
+        max_steps: int = 100
     ) -> int:
         """
         Execute a sequence of instructions
@@ -189,14 +189,14 @@ class SpikeSession:
             return self.engine.execute_sequence(machine_codes, sizes, max_steps)
         except Exception as e:
             # Debug output for execution failures
-            pc = self._state_query.get_pc() if self._state_query else 0
-            print(f"\n[SpikeSession] execute_sequence FAILED:")
-            print(f"  PC: 0x{pc:x}")
-            print(f"  Codes: {[f'0x{c:08x}' for c in machine_codes]}")
-            print(f"  Sizes: {sizes}")
-            print(f"  Error: {e}")
-            import traceback
-            traceback.print_exc()
+            # pc = self._state_query.get_pc() if self._state_query else 0
+            # print(f"\n[SpikeSession] execute_sequence FAILED:")
+            # print(f"  PC: 0x{pc:x}")
+            # print(f"  Codes: {[f'0x{c:08x}' for c in machine_codes]}")
+            # print(f"  Sizes: {sizes}")
+            # print(f"  Error: {e}")
+            # import traceback
+            # traceback.print_exc()
             raise
 
     def execute_single(self, machine_code: int, size: Optional[int] = None) -> int:

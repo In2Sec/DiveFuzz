@@ -57,28 +57,19 @@ class PrecisionFilter(ABC):
         self,
         name: str,
         phase: FilterPhase,
-        architectures: Optional[List[str]] = None,
         opcodes: Optional[List[str]] = None,
         description: str = "",
-        priority: int = 100,
         enabled: bool = True,
     ):
         self.name = name
         self.phase = phase
-        self.architectures = architectures or []
         self.opcodes = opcodes or []
         self.description = description
-        self.priority = priority
         self.enabled = enabled
 
     @abstractmethod
     def check(self, ctx: FilterContext) -> FilterResult:
         pass
-
-    def applies_to_architecture(self, architecture: str) -> bool:
-        if not self.architectures:
-            return True
-        return architecture.lower() in [a.lower() for a in self.architectures]
 
     def applies_to_opcode(self, opcode: str) -> bool:
         if not self.opcodes:
@@ -99,8 +90,6 @@ class PrecisionFilter(ABC):
     def should_apply(self, ctx: FilterContext) -> bool:
         if not self.enabled:
             return False
-        if not self.applies_to_architecture(ctx.architecture):
-            return False
         if not self.applies_to_opcode(ctx.opcode):
             return False
         return True
@@ -114,19 +103,15 @@ class FunctionFilter(PrecisionFilter):
         name: str,
         phase: FilterPhase,
         check_func: Callable[[FilterContext], FilterResult],
-        architectures: Optional[List[str]] = None,
         opcodes: Optional[List[str]] = None,
         description: str = "",
-        priority: int = 100,
         enabled: bool = True,
     ):
         super().__init__(
             name=name,
             phase=phase,
-            architectures=architectures,
             opcodes=opcodes,
             description=description,
-            priority=priority,
             enabled=enabled,
         )
         self._check_func = check_func
@@ -142,10 +127,8 @@ class FunctionFilter(PrecisionFilter):
 
 def pre_execution_filter(
     name: str,
-    architectures: Optional[List[str]] = None,
     opcodes: Optional[List[str]] = None,
     description: str = "",
-    priority: int = 100,
 ):
     """Decorator for pre-execution filters."""
 
@@ -154,10 +137,8 @@ def pre_execution_filter(
             name=name,
             phase=FilterPhase.PRE_EXECUTION,
             check_func=func,
-            architectures=architectures,
             opcodes=opcodes,
             description=description,
-            priority=priority,
         )
 
     return decorator
@@ -165,10 +146,8 @@ def pre_execution_filter(
 
 def post_execution_filter(
     name: str,
-    architectures: Optional[List[str]] = None,
     opcodes: Optional[List[str]] = None,
     description: str = "",
-    priority: int = 100,
 ):
     """Decorator for post-execution filters."""
 
@@ -177,10 +156,8 @@ def post_execution_filter(
             name=name,
             phase=FilterPhase.POST_EXECUTION,
             check_func=func,
-            architectures=architectures,
             opcodes=opcodes,
             description=description,
-            priority=priority,
         )
 
     return decorator
@@ -216,7 +193,6 @@ def collect_filters_from_caller() -> List[PrecisionFilter]:
     if not module_name:
         return []
 
-    # Import the calling module
     import importlib
 
     try:
@@ -245,16 +221,6 @@ class PreExecutionFilter(PrecisionFilter):
 
     Subclass this when implementing a pre-execution filter as a class.
     For simple cases, prefer the @pre_execution_filter decorator.
-
-    Example:
-        class DivByZeroFilter(PreExecutionFilter):
-            def __init__(self):
-                super().__init__(name="div_by_zero", opcodes=["div"])
-
-            def check(self, ctx) -> FilterResult:
-                if ctx.get_xpr(2) == 0:
-                    return FilterResult.reject("Division by zero")
-                return FilterResult.accept()
     """
 
     def __init__(self, name: str, **kwargs):
@@ -268,16 +234,6 @@ class PostExecutionFilter(PrecisionFilter):
 
     Subclass this when implementing a post-execution filter as a class.
     For simple cases, prefer the @post_execution_filter decorator.
-
-    Example:
-        class TrapFilter(PostExecutionFilter):
-            def __init__(self):
-                super().__init__(name="trap_filter")
-
-            def check(self, ctx) -> FilterResult:
-                if ctx.was_trapped():
-                    return FilterResult.reject("Instruction caused trap")
-                return FilterResult.accept()
     """
 
     def __init__(self, name: str, **kwargs):

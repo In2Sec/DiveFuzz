@@ -71,31 +71,8 @@ class FilterRegistry:
         self._pre_filters: List[PreExecutionFilter] = []
         self._post_filters: List[PostExecutionFilter] = []
 
-        # Current architecture
-        self._architecture: str = ""
-
         # Filter name to filter mapping (for quick lookup)
         self._name_to_filter: Dict[str, PrecisionFilter] = {}
-
-    # =========================================================================
-    # Configuration
-    # =========================================================================
-
-    def set_architecture(self, architecture: str) -> None:
-        """
-        Set the target architecture for filtering.
-
-        This affects which filters are applied based on their
-        architecture restrictions.
-
-        Args:
-            architecture: Architecture identifier ('xs', 'nts', 'cva6', 'boom', 'rocket')
-        """
-        self._architecture = architecture.lower()
-
-    def get_architecture(self) -> str:
-        """Get current target architecture"""
-        return self._architecture
 
     # =========================================================================
     # Registration
@@ -123,11 +100,8 @@ class FilterRegistry:
         # Add to appropriate list
         if filter.phase == FilterPhase.PRE_EXECUTION:
             self._pre_filters.append(filter)
-            # Sort by priority (lower = earlier)
-            self._pre_filters.sort(key=lambda f: f.priority)
         else:
             self._post_filters.append(filter)
-            self._post_filters.sort(key=lambda f: f.priority)
 
         # Add to name mapping
         self._name_to_filter[filter.name] = filter
@@ -324,7 +298,6 @@ class FilterRegistry:
         enabled_post = sum(1 for f in self._post_filters if f.enabled)
 
         return {
-            "architecture": self._architecture,
             "total_filters": len(self._name_to_filter),
             "pre_filters": {
                 "total": len(self._pre_filters),
@@ -345,7 +318,6 @@ class FilterRegistry:
     def __repr__(self) -> str:
         return (
             f"FilterRegistry("
-            f"arch={self._architecture!r}, "
             f"pre={len(self._pre_filters)}, "
             f"post={len(self._post_filters)})"
         )
@@ -372,16 +344,15 @@ def get_global_registry() -> FilterRegistry:
 
 def create_registry_for_architecture(architecture: str) -> FilterRegistry:
     """
-    Create a new registry configured for a specific architecture.
+    Create a new registry for a specific architecture.
 
-    This is the recommended way to create a registry for each worker.
+    The architecture parameter is used by the caller to register
+    the appropriate filters via register_architecture_filters().
 
     Args:
-        architecture: Target architecture
+        architecture: Target architecture (passed to register_architecture_filters)
 
     Returns:
-        Configured FilterRegistry instance
+        New FilterRegistry instance
     """
-    registry = FilterRegistry()
-    registry.set_architecture(architecture)
-    return registry
+    return FilterRegistry()

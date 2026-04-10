@@ -71,6 +71,7 @@ try:
     from .spike_session import SpikeSession
     from .xor_cache import XORCache, compute_xor
     from .spike_debug_logger import SpikeDebugLogger
+    from .stateful_xor_cache import StatefulXORCache, InstructionContext
     from ..bug_filter import bug_filter
     from ..bug_filter.context import (
         FilterContext,
@@ -89,6 +90,7 @@ except ImportError:
     from spike_session import SpikeSession
     from xor_cache import XORCache, compute_xor
     from spike_debug_logger import SpikeDebugLogger
+    from stateful_xor_cache import StatefulXORCache, InstructionContext
     from bug_filter import bug_filter
     from bug_filter.context import FilterContext, PreExecutionState, PostExecutionState
     from bug_filter.registry import FilterRegistry
@@ -130,6 +132,8 @@ class InstructionValidator:
         architecture: str = "",
         encoder: Optional[HybridEncoder] = None,
         precision_registry: Optional["FilterRegistry"] = None,
+        use_stateful_cache: bool = True,
+        bug_filter_enable: bool = True,
     ):
         """
         Initialize validator.
@@ -140,6 +144,8 @@ class InstructionValidator:
             architecture: Architecture for bug filter ('xs', 'nts', 'cva6', 'boom', 'rocket')
             encoder: HybridEncoder instance (creates default if None)
             precision_registry: FilterRegistry for precision filtering (None = legacy mode)
+            use_stateful_cache: Enable context-aware XOR deduplication when available
+            bug_filter_enable: Enable known-bug filtering (legacy bug_filter)
         """
         self.spike_session = spike_session
         self.xor_cache = xor_cache
@@ -147,8 +153,9 @@ class InstructionValidator:
         self.parser = InstructionParser()
         self.architecture = architecture
         self.precision_registry = precision_registry
+        self.use_stateful_cache = use_stateful_cache
+        self.bug_filter_enable = bug_filter_enable
 
-        # Initialize legacy bug filter (backward compatible)
         if architecture:
             bug_filter.set_architecture(architecture)
 
@@ -172,7 +179,16 @@ class InstructionValidator:
         if self.xor_cache is None:
             return xor_value, True
 
-        is_unique = self.xor_cache.check_and_add(opcode, xor_value)
+        if (
+            self.use_stateful_cache
+            and isinstance(self.xor_cache, StatefulXORCache)
+            and self.spike_session is not None
+        ):
+            is_unique = self.xor_cache.check_and_add_stateful(
+                opcode, xor_value, self.spike_session
+            )
+        else:
+            is_unique = self.xor_cache.check_and_add(opcode, xor_value)
         return xor_value, is_unique
 
     def _check_bug_legacy(self, opcode: str, source_values: List[int]) -> Optional[str]:
@@ -180,55 +196,22 @@ class InstructionValidator:
         return bug_filter.filter_known_bug(opcode, source_values)
 
     def _build_pre_execution_state(self) -> PreExecutionState:
-        """Build pre-execution state snapshot from SpikeSession."""
-        state = PreExecutionState()
+        """
+        Return a lazy pre-execution state proxy.
 
-        state.xpr = list(self.spike_session.get_all_xpr())
-        state.fpr = list(self.spike_session.get_all_fpr())
-        state.pc = self.spike_session.get_current_pc()
-
-        priv_state = self.spike_session.get_privilege_state()
-        state.privilege = priv_state.prv
-        state.virtualization = priv_state.v
-
-        res_state = self.spike_session.get_reservation_state()
-        state.reservation_valid = res_state.valid
-        state.reservation_addr = res_state.address
-
-        return state
+        No Spike queries are made here; fields are fetched on first access
+        by the filter that actually needs them.
+        """
+        return PreExecutionState(self.spike_session)
 
     def _build_post_execution_state(self) -> PostExecutionState:
-        """Build post-execution state snapshot from SpikeSession."""
-        state = PostExecutionState()
+        """
+        Return a lazy post-execution state proxy.
 
-        state.xpr = list(self.spike_session.get_all_xpr())
-        state.fpr = list(self.spike_session.get_all_fpr())
-        state.pc = self.spike_session.get_current_pc()
-
-        priv_state = self.spike_session.get_privilege_state()
-        state.privilege = priv_state.prv
-        state.virtualization = priv_state.v
-        state.privilege_changed = priv_state.prv_changed
-        state.virtualization_changed = priv_state.v_changed
-
-        trap_info = self.spike_session.get_last_trap_info()
-        state.trap_occurred = trap_info.occurred
-        state.trap_cause = trap_info.cause
-        state.trap_tval = trap_info.tval
-        state.trap_name = trap_info.name if trap_info.name else ""
-
-        commit_log = self.spike_session.get_commit_log()
-        state.reg_writes = [(rw.reg_num, rw.value) for rw in commit_log.reg_writes]
-        state.mem_reads = [(ma.addr, ma.value, ma.size) for ma in commit_log.mem_reads]
-        state.mem_writes = [
-            (ma.addr, ma.value, ma.size) for ma in commit_log.mem_writes
-        ]
-
-        res_state = self.spike_session.get_reservation_state()
-        state.reservation_valid = res_state.valid
-        state.reservation_addr = res_state.address
-
-        return state
+        No Spike queries are made here; fields are fetched on first access
+        by the filter that actually needs them.
+        """
+        return PostExecutionState(self.spike_session)
 
     def _build_filter_context(
         self,
@@ -248,7 +231,6 @@ class InstructionValidator:
             assembly=instruction,
             s_pre=s_pre,
             s_post=s_post,
-            architecture=self.architecture,
         )
 
     def validate_instruction(self, instruction: str) -> Tuple[bool, int]:
@@ -290,9 +272,10 @@ class InstructionValidator:
         if not is_unique:
             return False, 0
 
-        bug_name = self._check_bug_legacy(opcode, source_values)
-        if bug_name:
-            return False, 0
+        if self.bug_filter_enable:
+            bug_name = self._check_bug_legacy(opcode, source_values)
+            if bug_name:
+                return False, 0
 
         s_pre = None
         if self.precision_registry:
@@ -462,4 +445,3 @@ class InstructionValidator:
             cls._debug_file.close()
             cls._debug_file = None
         cls._debug_enabled = False
-

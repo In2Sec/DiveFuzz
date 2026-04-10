@@ -37,7 +37,7 @@ from ...instr_generator import (
 from ...reg_analyzer.nop_template_gen import generate_nop_elf, NOP_REDUNDANCY
 from ...reg_analyzer.spike_session import SpikeSession, SPIKE_ENGINE_AVAILABLE
 from ...reg_analyzer.instruction_validator import InstructionValidator
-from ...reg_analyzer.xor_cache import XORCache
+from ...reg_analyzer.stateful_xor_cache import StatefulXORCache as XORCache
 from ...reg_analyzer.hybrid_encoder import HybridEncoder
 from ...utils import list2str
 from .register_history import RegisterHistory
@@ -243,6 +243,8 @@ def generate_instructions(
     xor_cache_state: dict,
     architecture: str,
     debug_config: dict = None,
+    bug_filter_enable: bool = True,
+    jump_enable: bool = True,
 ):
     """
     Generate random RISC-V instructions for a single seed.
@@ -298,6 +300,7 @@ def generate_instructions(
                         architecture=architecture,
                         encoder=encoder,
                         precision_registry=precision_registry,
+                        bug_filter_enable=bug_filter_enable,
                     )
 
                     # Enable detailed debug output if debug_config is provided
@@ -481,8 +484,7 @@ def generate_instructions(
                         while instr in special_instr:
                             instr = random.choice(instrs_filter)
 
-                    # Jump instruction handling: detect if this is a jump/branch instruction
-                    is_direct_jump = instr in [
+                    DIRECT_JUMP_INSTRS = {
                         "jal",
                         "beq",
                         "bne",
@@ -494,8 +496,18 @@ def generate_instructions(
                         "c.beqz",
                         "c.bnez",
                         "c.jal",
-                    ]
-                    is_indirect_jump = instr in ["jalr", "c.jr", "c.jalr"]
+                    }
+                    INDIRECT_JUMP_INSTRS = {"jalr", "c.jr", "c.jalr"}
+
+                    if (
+                        not jump_enable
+                        and instr in DIRECT_JUMP_INSTRS | INDIRECT_JUMP_INSTRS
+                    ):
+                        total_instr_retry += 1
+                        continue
+
+                    is_direct_jump = instr in DIRECT_JUMP_INSTRS
+                    is_indirect_jump = instr in INDIRECT_JUMP_INSTRS
 
                     if is_direct_jump:
                         # The last instruction cannot be a jump instruction because there are no subsequent labels.

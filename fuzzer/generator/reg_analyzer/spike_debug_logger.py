@@ -35,69 +35,11 @@ from datetime import datetime
 if TYPE_CHECKING:
     from .spike_session import SpikeSession
 
+from .register_mapping import XPR_NAMES, FPR_NAMES
+from ..asm_template_manager.riscv_asm_syntex.csr import CSR_ADDR_TO_NAME
 
-# CSR name mapping (common CSRs)
-CSR_NAMES = {
-    # User-level CSRs
-    0x001: "fflags",
-    0x002: "frm",
-    0x003: "fcsr",
-    0x008: "vstart",
-    0x009: "vxsat",
-    0x00a: "vxrm",
-    0x00f: "vcsr",
-    0xc00: "cycle",
-    0xc01: "time",
-    0xc02: "instret",
-    0xc20: "vl",
-    0xc21: "vtype",
-    0xc22: "vlenb",
-
-    # Supervisor-level CSRs
-    0x100: "sstatus",
-    0x104: "sie",
-    0x105: "stvec",
-    0x106: "scounteren",
-    0x10a: "senvcfg",
-    0x140: "sscratch",
-    0x141: "sepc",
-    0x142: "scause",
-    0x143: "stval",
-    0x144: "sip",
-    0x180: "satp",
-
-    # Machine-level CSRs
-    0x300: "mstatus",
-    0x301: "misa",
-    0x302: "medeleg",
-    0x303: "mideleg",
-    0x304: "mie",
-    0x305: "mtvec",
-    0x306: "mcounteren",
-    0x310: "mstatush",
-    0x340: "mscratch",
-    0x341: "mepc",
-    0x342: "mcause",
-    0x343: "mtval",
-    0x344: "mip",
-    0x34a: "mtinst",
-    0x34b: "mtval2",
-    0x30a: "menvcfg",
-    0x31a: "menvcfgh",
-
-    # Machine Information Registers
-    0xf11: "mvendorid",
-    0xf12: "marchid",
-    0xf13: "mimpid",
-    0xf14: "mhartid",
-    0xf15: "mconfigptr",
-
-    # Performance counters
-    0xb00: "mcycle",
-    0xb02: "minstret",
-    0xb03: "mhpmcounter3",
-    0x323: "mhpmevent3",
-}
+# Re-export for callers that imported these names from this module
+CSR_NAMES = CSR_ADDR_TO_NAME
 
 # CSR groups for organized display
 CSR_GROUPS = {
@@ -109,22 +51,6 @@ CSR_GROUPS = {
 
 # Key CSRs to always show in FULL mode (most commonly used)
 KEY_CSRS = [0x300, 0x301, 0x305, 0x341, 0x342, 0x343, 0x003, 0xc20, 0xc21]
-
-# XPR register names (ABI names)
-XPR_NAMES = [
-    "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2",
-    "s0/fp", "s1", "a0", "a1", "a2", "a3", "a4", "a5",
-    "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7",
-    "s8", "s9", "s10", "s11", "t3", "t4", "t5", "t6"
-]
-
-# FPR register names (ABI names)
-FPR_NAMES = [
-    "ft0", "ft1", "ft2", "ft3", "ft4", "ft5", "ft6", "ft7",
-    "fs0", "fs1", "fa0", "fa1", "fa2", "fa3", "fa4", "fa5",
-    "fa6", "fa7", "fs2", "fs3", "fs4", "fs5", "fs6", "fs7",
-    "fs8", "fs9", "fs10", "fs11", "ft8", "ft9", "ft10", "ft11"
-]
 
 
 class SpikeDebugLogger:

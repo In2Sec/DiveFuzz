@@ -16,19 +16,24 @@ from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError
 from tqdm import tqdm
 from .generate_instrs import generate_instructions
 from ...asm_template_manager.riscv_asm_syntex import ArchConfig
-from ...reg_analyzer.xor_cache import XORCache
+from ...reg_analyzer.stateful_xor_cache import StatefulXORCache
 
 
-def generate_instructions_parallel(instr_number: int,
-                                   seed_times: int,
-                                   eliminate_enable: bool,
-                                   is_rv32: bool,
-                                   max_workers: int,
-                                   arch: ArchConfig,
-                                   template_type: str,
-                                   out_dir: str = "out-seeds-2025-test",
-                                   architecture: str = 'xs',
-                                   debug_config: dict = None):
+def generate_instructions_parallel(
+    instr_number: int,
+    seed_times: int,
+    eliminate_enable: bool,
+    is_rv32: bool,
+    max_workers: int,
+    arch: ArchConfig,
+    template_type: str,
+    out_dir: str = "out-seeds-2025-test",
+    architecture: str = "xs",
+    debug_config: dict = None,
+    stateful_xor_cache: bool = True,
+    bug_filter_enable: bool = True,
+    jump_enable: bool = True,
+):
     """
     Generate random RISC-V instructions in parallel across multiple processes.
 
@@ -72,17 +77,28 @@ def generate_instructions_parallel(instr_number: int,
     # Uses shared memory Bloom Filter with optional file persistence
     xor_cache = None
     xor_cache_state = None
-    cache_file = os.path.join(out_dir, 'xor_cache.bloom')
+    cache_file = os.path.join(out_dir, "xor_cache.bloom")
 
     if eliminate_enable:
         # Ensure output directory exists
         os.makedirs(out_dir, exist_ok=True)
 
-        xor_cache = XORCache.create_for_workload(
-            num_seeds=seed_times,
-            instrs_per_seed=instr_number,
-            false_positive_rate=0.01
-        )
+        use_stateful = stateful_xor_cache
+        if use_stateful:
+            xor_cache = StatefulXORCache.create_for_workload(
+                num_seeds=seed_times,
+                instrs_per_seed=instr_number,
+                false_positive_rate=0.01,
+            )
+        else:
+            # 延迟导入以避免导入链对启动时间或依赖检查的影响
+            from ...reg_analyzer.xor_cache import XORCache
+
+            xor_cache = XORCache.create_for_workload(
+                num_seeds=seed_times,
+                instrs_per_seed=instr_number,
+                false_positive_rate=0.01,
+            )
         xor_cache.create()
 
         # Load existing cache if available (for incremental fuzzing)
@@ -97,6 +113,9 @@ def generate_instructions_parallel(instr_number: int,
 
         xor_cache_state = xor_cache.get_state_for_worker()
 
+    # Ensure xor_cache_state is a dict when passed to worker functions
+    xor_cache_state = xor_cache_state or {}
+
     try:
         # The list of seed indexes to be generated
         pending_seeds = list(range(seed_times))
@@ -106,7 +125,9 @@ def generate_instructions_parallel(instr_number: int,
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             while pending_seeds and retry_round < max_retries:
                 if retry_round > 0:
-                    print(f"# Retry round {retry_round}/{max_retries} for {len(pending_seeds)} timed out seeds")
+                    print(
+                        f"# Retry round {retry_round}/{max_retries} for {len(pending_seeds)} timed out seeds"
+                    )
 
                 futures = {}
                 for seed_idx in pending_seeds:
@@ -121,7 +142,9 @@ def generate_instructions_parallel(instr_number: int,
                         out_dir,
                         xor_cache_state,
                         architecture,
-                        debug_config
+                        debug_config,
+                        bug_filter_enable,
+                        jump_enable,
                     )
                     futures[future] = seed_idx
 
@@ -129,8 +152,11 @@ def generate_instructions_parallel(instr_number: int,
                 pending_seeds = []
 
                 # collect results
-                for future in tqdm(as_completed(futures), total=len(futures),
-                                 desc="# Generating instructions"):
+                for future in tqdm(
+                    as_completed(futures),
+                    total=len(futures),
+                    desc="# Generating instructions",
+                ):
                     seed_idx = futures[future]
                     try:
                         result1, result2 = future.result(timeout=timeout_seconds)
@@ -147,7 +173,9 @@ def generate_instructions_parallel(instr_number: int,
                 retry_round += 1
 
             if pending_seeds:
-                print(f"# {len(pending_seeds)} seeds failed after {max_retries} retry rounds, skipping")
+                print(
+                    f"# {len(pending_seeds)} seeds failed after {max_retries} retry rounds, skipping"
+                )
 
         print(f"# Successfully generated: {completed_count}/{seed_times} seeds")
         print(f"# Total timeouts: {timeout_count}")
