@@ -28,6 +28,7 @@ Design Philosophy:
 
 from typing import Optional, Tuple, List
 from enum import IntEnum
+from .register_mapping import XPR_ABI_TO_NUM, FPR_ABI_TO_NUM
 
 # Floating-point register index offset
 # Register index convention:
@@ -167,34 +168,15 @@ class InstructionParser:
     # Build opcode to type mapping
     _OPCODE_TO_TYPE = {op: instr_type for instr_type, ops in _INSTRUCTION_GROUPS.items() for op in ops}
 
-    # Register name to index mapping (integer registers)
-    _REG_NAME_TO_INDEX = {
-        'zero': 0, 'ra': 1, 'sp': 2, 'gp': 3, 'tp': 4,
-        't0': 5, 't1': 6, 't2': 7,
-        's0': 8, 'fp': 8, 's1': 9,
-        'a0': 10, 'a1': 11, 'a2': 12, 'a3': 13, 'a4': 14, 'a5': 15, 'a6': 16, 'a7': 17,
-        's2': 18, 's3': 19, 's4': 20, 's5': 21, 's6': 22, 's7': 23, 's8': 24, 's9': 25,
-        's10': 26, 's11': 27,
-        't3': 28, 't4': 29, 't5': 30, 't6': 31,
-    }
+    # Combined name → index mapping (XPR and FPR, both use 0-31 indices).
+    # Built from the canonical dicts in register_mapping; callers use
+    # FPR_OFFSET to distinguish XPR from FPR after the lookup.
+    _REG_NAME_TO_INDEX: dict = {**XPR_ABI_TO_NUM, **FPR_ABI_TO_NUM}
+    for _i in range(32):
+        _REG_NAME_TO_INDEX[f'x{_i}'] = _i
+        _REG_NAME_TO_INDEX[f'f{_i}'] = _i
 
-    # Add x0-x31 and f0-f31 mappings
-    for i in range(32):
-        _REG_NAME_TO_INDEX[f'x{i}'] = i
-        _REG_NAME_TO_INDEX[f'f{i}'] = i
-
-    # Add floating-point register ABI names (ft0-ft11, fs0-fs11, fa0-fa7)
-    _FPR_ABI_TO_INDEX = {
-        'ft0': 0, 'ft1': 1, 'ft2': 2, 'ft3': 3, 'ft4': 4, 'ft5': 5, 'ft6': 6, 'ft7': 7,
-        'fs0': 8, 'fs1': 9,
-        'fa0': 10, 'fa1': 11,
-        'fa2': 12, 'fa3': 13, 'fa4': 14, 'fa5': 15, 'fa6': 16, 'fa7': 17,
-        'fs2': 18, 'fs3': 19, 'fs4': 20, 'fs5': 21, 'fs6': 22, 'fs7': 23,
-        'fs8': 24, 'fs9': 25, 'fs10': 26, 'fs11': 27,
-        'ft8': 28, 'ft9': 29, 'ft10': 30, 'ft11': 31,
-    }
-    # Add FPR ABI names to the main mapping (they use same 0-31 indices as f0-f31)
-    _REG_NAME_TO_INDEX.update(_FPR_ABI_TO_INDEX)
+    _FPR_ABI_TO_INDEX: dict = FPR_ABI_TO_NUM
 
     @staticmethod
     def _extract_base_register(addr_str: str) -> str:
@@ -233,7 +215,7 @@ class InstructionParser:
             return False
 
         # Check if it's in the FPR ABI mapping (ft*, fs*, fa*)
-        if reg_name in InstructionParser._FPR_ABI_TO_INDEX:
+        if reg_name in FPR_ABI_TO_NUM:
             return True
 
         # Check f0-f31 format: must be 'f' followed by a valid number

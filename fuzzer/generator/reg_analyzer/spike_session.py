@@ -108,6 +108,9 @@ class SpikeSession:
         # Spike engine instance
         self.engine: Optional[spike_engine.SpikeEngine] = None
 
+        # StateQuery interface (cached reference for performance)
+        self._state_query = None
+
         # State tracking
         self.checkpoint_set: bool = False
         self.initialized: bool = False
@@ -142,6 +145,9 @@ class SpikeSession:
                 print(f"[SpikeSession] Initialization failed: {error_msg}")
                 return False
 
+            # Cache StateQuery interface for efficient register access
+            self._state_query = self.engine.get_state_query()
+
             self.initialized = True
             return True
 
@@ -155,7 +161,7 @@ class SpikeSession:
         self,
         machine_codes: List[int],
         sizes: List[int],
-        max_steps: int = 10000
+        max_steps: int = 100
     ) -> int:
         """
         Execute a sequence of instructions
@@ -183,14 +189,14 @@ class SpikeSession:
             return self.engine.execute_sequence(machine_codes, sizes, max_steps)
         except Exception as e:
             # Debug output for execution failures
-            pc = self.engine.get_pc() if self.engine else 0
-            print(f"\n[SpikeSession] execute_sequence FAILED:")
-            print(f"  PC: 0x{pc:x}")
-            print(f"  Codes: {[f'0x{c:08x}' for c in machine_codes]}")
-            print(f"  Sizes: {sizes}")
-            print(f"  Error: {e}")
-            import traceback
-            traceback.print_exc()
+            # pc = self._state_query.get_pc() if self._state_query else 0
+            # print(f"\n[SpikeSession] execute_sequence FAILED:")
+            # print(f"  PC: 0x{pc:x}")
+            # print(f"  Codes: {[f'0x{c:08x}' for c in machine_codes]}")
+            # print(f"  Sizes: {sizes}")
+            # print(f"  Error: {e}")
+            # import traceback
+            # traceback.print_exc()
             raise
 
     def execute_single(self, machine_code: int, size: Optional[int] = None) -> int:
@@ -220,7 +226,7 @@ class SpikeSession:
             self.engine.set_checkpoint()
             self.checkpoint_set = True
         except Exception as e:
-            pc = self.engine.get_pc() if self.engine else 0
+            pc = self._state_query.get_pc() if self._state_query else 0
             print(f"\n[SpikeSession] set_checkpoint FAILED:")
             print(f"  PC: 0x{pc:x}")
             print(f"  Error: {e}")
@@ -254,7 +260,7 @@ class SpikeSession:
             self.engine.restore_checkpoint()
             self.checkpoint_set = False
         except Exception as e:
-            pc = self.engine.get_pc() if self.engine else 0
+            pc = self._state_query.get_pc() if self._state_query else 0
             print(f"\n[SpikeSession] restore_checkpoint_and_reset FAILED:")
             print(f"  PC: 0x{pc:x}")
             print(f"  Error: {e}")
@@ -274,7 +280,7 @@ class SpikeSession:
         """
         if not self.initialized:
             raise RuntimeError("Session not initialized")
-        return self.engine.get_pc()
+        return self._state_query.get_pc()
 
     def get_xpr(self, reg_index: int) -> int:
         """
@@ -291,7 +297,7 @@ class SpikeSession:
         """
         if not self.initialized:
             raise RuntimeError("Session not initialized")
-        return self.engine.get_xpr(reg_index)
+        return self._state_query.get_xpr(reg_index)
 
     def get_fpr(self, reg_index: int) -> int:
         """
@@ -308,7 +314,7 @@ class SpikeSession:
         """
         if not self.initialized:
             raise RuntimeError("Session not initialized")
-        return self.engine.get_fpr(reg_index)
+        return self._state_query.get_fpr(reg_index)
 
     def get_all_xpr(self) -> List[int]:
         """
@@ -322,7 +328,7 @@ class SpikeSession:
         """
         if not self.initialized:
             raise RuntimeError("Session not initialized")
-        return list(self.engine.get_all_xpr())
+        return list(self._state_query.get_all_xpr())
 
     def get_all_fpr(self) -> List[int]:
         """
@@ -336,7 +342,7 @@ class SpikeSession:
         """
         if not self.initialized:
             raise RuntimeError("Session not initialized")
-        return list(self.engine.get_all_fpr())
+        return list(self._state_query.get_all_fpr())
 
     def get_csr(self, csr_addr: int) -> int:
         """
@@ -353,7 +359,7 @@ class SpikeSession:
         """
         if not self.initialized:
             raise RuntimeError("Session not initialized")
-        return self.engine.get_csr(csr_addr)
+        return self._state_query.get_csr(csr_addr)
 
     def get_all_csrs(self) -> dict:
         """
@@ -367,7 +373,7 @@ class SpikeSession:
         """
         if not self.initialized:
             raise RuntimeError("Session not initialized")
-        return dict(self.engine.get_all_csrs())
+        return dict(self._state_query.get_all_csrs())
 
     def get_mem_region_info(self) -> Tuple[int, int]:
         """
@@ -399,7 +405,7 @@ class SpikeSession:
         """
         if not self.initialized:
             raise RuntimeError("Session not initialized")
-        return bytes(self.engine.read_mem(addr, size))
+        return bytes(self._state_query.read_mem(addr, size))
 
     def get_all_registers(self) -> dict:
         """
@@ -453,6 +459,328 @@ class SpikeSession:
             raise RuntimeError("Session not initialized")
         return self.engine.get_last_trap_handler_steps()
 
+    #==========================================================================
+    # Commit Log Methods
+    #==========================================================================
+
+    def get_commit_log(self):
+        """
+        Get the commit log from the last executed instruction.
+
+        The commit log captures all side effects of instruction execution:
+        - reg_writes: List of RegisterWrite (reg_num, value)
+        - mem_reads: List of MemoryAccess (addr, value, size)
+        - mem_writes: List of MemoryAccess (addr, value, size)
+        - inst_priv: Privilege level during execution
+        - inst_xlen: XLEN during execution
+        - inst_flen: FLEN during execution
+
+        Returns:
+            CommitLog object with all side effects
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.get_commit_log()
+
+    def clear_commit_log(self):
+        """
+        Clear the commit log.
+
+        Call this before executing the next instruction to get clean commit log.
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        self._state_query.clear_commit_log()
+
+    #==========================================================================
+    # Privilege State Methods
+    #==========================================================================
+
+    def get_privilege_state(self):
+        """
+        Get current privilege state including transition flags.
+
+        Returns PrivilegeState with:
+        - prv: Current privilege level (0=U, 1=S, 3=M)
+        - prev_prv: Previous privilege level
+        - prv_changed: Whether privilege changed on last instruction
+        - v: Virtualization mode (H extension)
+        - prev_v: Previous virtualization mode
+        - v_changed: Whether virtualization mode changed
+        - debug_mode: Whether in debug mode
+
+        Returns:
+            PrivilegeState object
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.get_privilege_state()
+
+    def did_privilege_change(self) -> bool:
+        """
+        Check if privilege level changed on last instruction.
+
+        Returns:
+            True if privilege or virtualization mode changed
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.did_privilege_change()
+
+    #==========================================================================
+    # Debug State Methods
+    #==========================================================================
+
+    def get_debug_state(self):
+        """
+        Get debug and execution control state.
+
+        Returns DebugState with:
+        - debug_mode: Whether in debug mode
+        - single_step: Single step state (0=NONE, 1=STEPPING, 2=STEPPED)
+        - critical_error: Whether critical error occurred
+        - elp: Expected Landing Pad state (Zicfilp extension)
+        - serialized: Whether timer CSRs are in well-defined state
+
+        Returns:
+            DebugState object
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.get_debug_state()
+
+    def is_debug_mode(self) -> bool:
+        """
+        Check if processor is in debug mode.
+
+        Returns:
+            True if in debug mode
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.is_debug_mode()
+
+    def is_single_stepping(self) -> bool:
+        """
+        Check if processor is single stepping.
+
+        Returns:
+            True if single stepping
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.is_single_stepping()
+
+    def has_critical_error(self) -> bool:
+        """
+        Check if a critical error occurred.
+
+        Returns:
+            True if critical error occurred
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.has_critical_error()
+
+    def get_elp(self) -> int:
+        """
+        Get Expected Landing Pad state (Zicfilp extension).
+
+        Returns:
+            0 = NO_LP_EXPECTED, 1 = LP_EXPECTED
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.get_elp()
+
+    #==========================================================================
+    # Trap/Exception Methods
+    #==========================================================================
+
+    def get_last_trap_info(self):
+        """
+        Get detailed trap information from last execution.
+
+        Returns TrapInfo with:
+        - occurred: Whether a trap occurred
+        - cause: Trap cause code
+        - tval: Trap value (bad address/instruction)
+        - tval2: Second trap value (guest physical address)
+        - tinst: Trapped instruction encoding
+        - has_gva: Has guest virtual address
+        - name: Human-readable trap name
+
+        Returns:
+            TrapInfo object (check .occurred field)
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.get_last_trap_info()
+
+    def clear_trap_info(self):
+        """
+        Clear trap information.
+
+        Call this before executing the next instruction if needed.
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        self._state_query.clear_trap_info()
+
+    #==========================================================================
+    # Vector Unit Methods
+    #==========================================================================
+
+    def get_vector_state(self, include_regfile: bool = False):
+        """
+        Get vector unit state.
+
+        Returns VectorState with:
+        - vl: Vector length
+        - vtype: Vector type register
+        - vstart: Vector start index
+        - vxsat: Vector saturation flag
+        - vxrm: Vector rounding mode
+        - vlenb: Vector register length in bytes
+        - vlmax: Maximum vector length for current config
+        - vsew: Selected element width (8, 16, 32, 64)
+        - vflmul: Fractional LMUL value
+        - vma: Mask agnostic flag
+        - vta: Tail agnostic flag
+        - vill: Illegal configuration flag
+        - VLEN: Hardware VLEN
+        - ELEN: Hardware ELEN
+        - vreg_file: Complete vector register file (if include_regfile=True)
+
+        Args:
+            include_regfile: If True, include complete vector register file
+
+        Returns:
+            VectorState object
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.get_vector_state(include_regfile)
+
+    def is_vector_enabled(self) -> bool:
+        """
+        Check if vector extension is enabled.
+
+        Returns:
+            True if V extension is available
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.is_vector_enabled()
+
+    #==========================================================================
+    # Load Reservation Methods (for LR/SC atomic operations)
+    #==========================================================================
+
+    def get_reservation_state(self):
+        """
+        Get load reservation state for atomic operations.
+
+        Returns ReservationState with:
+        - valid: Whether a reservation is active
+        - address: Reserved physical address
+
+        Returns:
+            ReservationState object
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.get_reservation_state()
+
+    def has_reservation(self) -> bool:
+        """
+        Check if a load reservation is currently active.
+
+        Returns:
+            True if reservation is valid
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        return self._state_query.has_reservation()
+
+    def clear_reservation(self):
+        """
+        Clear the load reservation (yield).
+
+        This simulates the effect of a context switch or other event
+        that invalidates load reservations.
+
+        Raises:
+            RuntimeError: If session not initialized
+        """
+        if not self.initialized:
+            raise RuntimeError("Session not initialized")
+        self._state_query.clear_reservation()
+
+    #==========================================================================
+    # Direct StateQuery Access (for advanced use cases)
+    #==========================================================================
+
+    def get_state_query(self):
+        """
+        Get direct access to the StateQuery interface.
+
+        This provides access to all StateQuery methods for advanced use cases
+        not covered by the convenience methods above.
+
+        Returns:
+            StateQuery object (or None if not initialized)
+
+        Note:
+            For most use cases, prefer the convenience methods above.
+        """
+        return self._state_query
+
     def cleanup(self):
         """
         Cleanup resources
@@ -460,6 +788,7 @@ class SpikeSession:
         Should be called when session is no longer needed.
         Note: With shared cache mode, no need to save cache (already in shared memory).
         """
+        self._state_query = None
         self.engine = None
         self.initialized = False
         self.checkpoint_set = False

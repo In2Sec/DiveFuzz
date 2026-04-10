@@ -1586,31 +1586,38 @@ def build_template_nutshell(arch: ArchConfig) -> AsmProgram:
 
 def build_template_rocket(arch: ArchConfig) -> AsmProgram:
     """
-    Build complete XiangShan S-mode template.
+    Build complete Rocket template.
 
-    This template runs in supervisor mode with virtual memory (SATP/page tables).
+    Rocket is the original in-order RISC-V processor from UC Berkeley.
+
+    Supported extensions: RV64GC (I/M/A/F/D/C) + Zicsr + Zifencei
+    NOT supported: Zfh/Zfhmin (half-precision FP), V (vector), B (bit manipulation),
+                   ZK* (crypto) by default
+
+    This template runs in M/S/U modes with simple exception handling.
     """
     p = AsmProgram(arch=arch)
 
-    if random.random() < 0:
-        _xs_text_startup(p)
-        _s_mode_pmp_setup(p)
-        _s_mode_mepc_setup(p)
-        _s_mode_supervisor_init(p)
-        _s_mode_init_sequence(p)
-        _exception_vector(p)
-        _s_mode_main_with_hook(p)
-        _common_support_routines(p)
-        _s_mode_data_sections(p)
-    else:
-        _xs_text_startup(p)
-        _xs_init(p)
-        _xs_init_reg(p)
-        _exception_vector(p)
-        _common_main_with_hook(p)
-        _common_support_routines(p)
-        _init_data_sections(p)
+    # Startup sequence
+    _rocket_text_startup(p)
 
+    # Mode initialization
+    _rocket_init(p)
+
+    # Register initialization (NO fmv.h.x!)
+    _rocket_init_reg(p)
+
+    # Exception handlers
+    _rocket_exception_vector(p)
+
+    # Main section with hook
+    _common_main_with_hook(p)
+
+    # Support routines
+    _common_support_routines(p)
+
+    # Data sections
+    _rocket_data_sections(p)
 
     return p
 
@@ -2027,6 +2034,304 @@ def build_template_boom(arch: ArchConfig) -> AsmProgram:
 
     # Data sections
     _boom_data_sections(p)
+
+    return p
+
+
+# ------------------------------------------------------------------------------
+# Rocket Private Functions (_rocket_*)
+# Rocket Config: RV64GC (I/M/A/F/D/C), NO Zfh/B/ZK by default
+# Similar to BOOM - standard RISC-V with basic extensions
+# ------------------------------------------------------------------------------
+
+def _random_mstatus_rocket():
+    """
+    Generate random MSTATUS value for Rocket.
+
+    Rocket Config:
+    - RV64 (XLEN=64)
+    - No H extension (RVH=0)
+    - Supports M/S/U modes
+    - Has MMU (SV39)
+    - No V extension
+    - FPU: F and D extensions
+    """
+    val = 0
+
+    # SD(63) - derived by hardware, keep 0
+
+    # SXL[1:0] (35-34) & UXL[1:0] (33-32)
+    # For RV64: 2 means 64-bit
+    sxl = 2  # Always 64-bit for Rocket
+    uxl = 2
+    val |= (sxl << 34)
+    val |= (uxl << 32)
+
+    # TSR(22), TW(21), TVM(20), MXR(19), SUM(18), MPRV(17)
+    for bit in [22, 21, 20, 19, 18, 17]:
+        val |= (random.randint(0, 1) << bit)
+
+    # XS[1:0] (16-15), FS[1:0] (14-13)
+    # Rocket has F/D extensions, so FS can be non-zero
+    # IMPORTANT: FS must NOT be 0, otherwise FP instructions cause illegal instruction exceptions
+    xs = random.randint(0, 3)
+    fs = random.randint(1, 3)  # Never Off, always enable FP
+    val |= (xs << 15)
+    val |= (fs << 13)
+
+    # VS[1:0] (10-9) - Rocket has no V extension
+    vs = 0
+    val |= (vs << 9)
+
+    # MPP[1:0] (12-11): legal values 0 (U), 1 (S), 3 (M)
+    mpp = random.choice([0, 1, 3])
+    val |= (mpp << 11)
+
+    # SPP(8), MPIE(7), UBE(6), SPIE(5), MIE(3), SIE(1)
+    for bit in [8, 7, 5, 3, 1]:
+        val |= (random.randint(0, 1) << bit)
+
+    # UBE(6) - Rocket is little-endian, keep 0
+
+    return val & ((1 << 64) - 1)
+
+
+def _rocket_text_startup(p: AsmProgram) -> AsmProgram:
+    """
+    [Rocket] Build the startup sequence in .text.init.
+    Rocket uses standard RISC-V privilege architecture.
+
+    NOTE: We use .text.init instead of .text to ensure code is placed
+    at 0x80000000 first, matching Chipyard's memory preload mechanism.
+    """
+    p.globl(LBL_START).section(".text.init")
+
+    p.label(LBL_START)
+
+    # Rocket's MISA may be writable or read-only depending on config
+    # Setup trap vectors
+    p.label(LBL_TRAP_VEC_INIT)
+    p.la("x13", LBL_OTHER_EXP)
+    p.csrw(CSR.MTVEC, "x13", comment="MTVEC")
+    p.la("x13", LBL_OTHER_EXP_S)
+    p.csrw(CSR.STVEC, "x13", comment="STVEC")
+
+    p.label(LBL_MEPC_SETUP)
+    p.la("x13", LBL_INIT)
+    p.csrw(CSR.MEPC, "x13")
+
+    return p
+
+
+def _rocket_init(p: AsmProgram) -> AsmProgram:
+    """
+    [Rocket] Mode initialization:
+    - Write MSTATUS/MIE/PMP
+    - Enter init via mret
+
+    Rocket supports M/S/U modes with SV39 MMU.
+    """
+    p.label(LBL_INIT_ENV)
+
+    # Generate random MSTATUS for Rocket
+    ms_val = _random_mstatus_rocket()
+    mpp = (ms_val >> 11) & 0b11
+
+    # Load and write MSTATUS
+    p.li("x26", f"0x{ms_val:016x}")
+    p.csrw(CSR.MSTATUS, "x26", comment=f"MSTATUS (MPP={mpp})")
+
+    # PMP setup - Rocket has 8 PMP entries by default
+    # Configure PMP to allow full memory access for S/U mode.
+    #
+    # In RV64, PMP configuration registers layout:
+    #   - pmpcfg0 (0x3a0): configures entries 0-7 (8 bytes, 1 byte per entry)
+    #   - pmpcfg2 (0x3a2): configures entries 8-15
+    #   - pmpcfg1/pmpcfg3 do NOT exist in RV64 (only in RV32)
+    #
+    # Strategy:
+    #   1. Set pmpaddr0 = all 1s for NAPOT covering entire address space
+    #   2. Set pmpcfg0 entry 0 = 0x1f (NAPOT mode, RWX permissions)
+    #   3. Clear pmpcfg2 to disable entries 8-15
+    p.li("x16", -1)  # All 1s = 0xffffffffffffffff
+    p.csrw(0x3b0, "x16", comment="pmpaddr0 = all 1s (NAPOT full coverage)")
+    p.li("x16", 0x1f)  # Entry 0: A=NAPOT(11), X=1, W=1, R=1
+    p.csrw(0x3a0, "x16", comment="pmpcfg0: entry 0 = NAPOT+RWX")
+    p.li("x16", 0x0)
+    p.csrw(0x3a2, "x16", comment="pmpcfg2 = 0 (disable entries 8-15)")
+    if mpp != 3:
+        p.instr("sfence.vma", "x0", "x0")
+
+    # Initialize exception delegation registers
+    p.li("x26", "0x0")
+    p.csrw(CSR.MEDELEG, "x26", comment="MEDELEG - no delegation to S-mode")
+    p.csrw(CSR.MIDELEG, "x26", comment="MIDELEG - no delegation to S-mode")
+    p.csrw(CSR.MIE, "x26", comment="MIE")
+
+    # Initialize scratch/trap-value CSRs to zero for cosim state synchronization
+    p.csrw(CSR.MSCRATCH, "x26", comment="MSCRATCH - init to 0 for cosim sync")
+    p.csrw(CSR.MTVAL, "x26", comment="MTVAL - init to 0 for cosim sync")
+    p.csrw(CSR.MCAUSE, "x26", comment="MCAUSE - init to 0 for cosim sync")
+    p.csrw(CSR.SSCRATCH, "x26", comment="SSCRATCH - init to 0 for cosim sync")
+    p.csrw(CSR.STVAL, "x26", comment="STVAL - init to 0 for cosim sync")
+    p.csrw(CSR.SCAUSE, "x26", comment="SCAUSE - init to 0 for cosim sync")
+    p.csrw(CSR.SEPC, "x26", comment="SEPC - init to 0 for cosim sync")
+
+    p.mret()
+
+    return p
+
+
+def _rocket_init_reg(p: AsmProgram) -> AsmProgram:
+    """
+    [Rocket] Initialize floating-point and general-purpose registers.
+
+    Rocket supports F and D extensions (NO Zfh), so we only use:
+    - fmv.w.x (single precision, F extension)
+    - fmv.d.x (double precision, D extension)
+
+    NO fmv.h.x (half precision, Zfh extension)!
+    """
+    p.label(LBL_INIT)
+
+    # Set floating-point rounding mode
+    major_modes = [0, 1, 2, 3, 4]
+    minor_modes = [5, 6, 7]
+
+    if random.random() < 0.95:
+        rm = random.choice(major_modes)
+    else:
+        rm = random.choice(minor_modes)
+
+    p.instr("fsrmi", str(rm))
+    # Clear fflags - RISC-V spec doesn't mandate reset value, software must clear
+    p.instr("csrwi", "fflags", "0")
+
+    # === General-purpose register initialization ===
+    # Initialize ALL x1-x31 (x0 is hardwired to 0)
+    for r in range(1, 32):
+        rand_val = random.getrandbits(64)
+        p.li(f"x{r}", f"0x{rand_val:016x}")
+
+    # === Floating-point register initialization ===
+    # Rocket: Only use fmv.w.x or fmv.d.x (NO fmv.h.x!)
+    for r in range(32):
+        rand_val = random.getrandbits(64)
+        p.li("x5", f"0x{rand_val:016x}")  # Use t0 as temp register
+        op = random.choice(["fmv.w.x", "fmv.d.x"])
+        p.instr(op, f"f{r}", "x5")
+
+    # Setup memory region pointer for Store/Load operations
+    p.la("t6", SYM_MEM_REGION)
+    p.li("t5", "4096")
+    p.instr("add", "t6", "t6", "t5")
+
+    p.instr("j", LBL_MAIN)
+
+    p.align(12)
+    return p
+
+
+def _rocket_exception_vector(p: AsmProgram) -> AsmProgram:
+    """
+    [Rocket] Exception handlers for M-mode and S-mode.
+
+    Similar to BOOM/CVA6, handles both interrupts and exceptions:
+    - Interrupts: Disable all interrupts to prevent storm, then return
+    - Exceptions: Skip the faulting instruction and continue
+    """
+    # =========================================================================
+    # M-mode trap handler
+    # =========================================================================
+    p.label(LBL_OTHER_EXP)
+    p.option("norvc")
+
+    # Read mcause to determine if this is an interrupt or exception
+    p.csrr("x14", CSR.MCAUSE)
+
+    # Check if interrupt (mcause[63] == 1)
+    p.instr("blt", "x14", "x0", "m_handle_interrupt_rocket")
+
+    # --- Exception path: skip the faulting instruction ---
+    p.csrr("x13", CSR.MEPC)
+    p.instr("addi", "x13", "x13", "4")
+    p.csrw(CSR.MEPC, "x13")
+    p.mret()
+
+    # --- Interrupt path: disable interrupts to prevent storm ---
+    p.label("m_handle_interrupt_rocket")
+    p.li("x15", "0")
+    p.csrw(CSR.MIE, "x15")
+    p.csrr("x13", CSR.MSTATUS)
+    p.li("x15", "-9")  # Mask to clear bit 3 (MIE)
+    p.instr("and", "x13", "x13", "x15")
+    p.csrw(CSR.MSTATUS, "x13")
+    p.mret()
+
+    p.option("rvc")
+
+    # =========================================================================
+    # S-mode trap handler
+    # =========================================================================
+    p.label(LBL_OTHER_EXP_S)
+    p.option("norvc")
+
+    p.csrr("x14", CSR.SCAUSE)
+    p.instr("blt", "x14", "x0", "s_handle_interrupt_rocket")
+
+    # --- Exception path ---
+    p.csrr("x13", CSR.SEPC)
+    p.instr("addi", "x13", "x13", "4")
+    p.csrw(CSR.SEPC, "x13")
+    p.instr("sret")
+
+    # --- Interrupt path ---
+    p.label("s_handle_interrupt_rocket")
+    p.li("x15", "0")
+    p.csrw(CSR.SIE, "x15")
+    p.csrr("x13", CSR.SSTATUS)
+    p.li("x15", "-3")  # Mask to clear bit 1 (SIE)
+    p.instr("and", "x13", "x13", "x15")
+    p.csrw(CSR.SSTATUS, "x13")
+    p.instr("sret")
+
+    p.option("rvc")
+
+    return p
+
+
+def _rocket_data_sections(p: AsmProgram) -> AsmProgram:
+    """
+    [Rocket] Data area and custom sections.
+    """
+    p.section(".data")
+    p.directive("align", "6")
+    p.directive("global", SYM_TOHOST)
+    p.label(SYM_TOHOST)
+    if p.arch.is_rv64():
+        p.data_dword(0)
+    else:
+        p.data_word(0, 0)
+
+    p.directive("align", "6")
+    p.directive("global", SYM_FROMHOST)
+    p.label(SYM_FROMHOST)
+    if p.arch.is_rv64():
+        p.data_dword(0)
+    else:
+        p.data_word(0, 0)
+
+    p.section(".region_0", flags="aw", sect_type="@progbits")
+    p.label(SYM_REGION0)
+    rand_words = [f"0x{random.getrandbits(32):08x}" for _ in range(8)]
+    p.data_word(*rand_words)
+
+    # Memory region for load/store operations
+    p.section(".mem_region", flags="aw", sect_type="@progbits")
+    p.align(4)
+    p.label(SYM_MEM_REGION)
+    _init_random_mem_region(p)
+    p.label(SYM_MEM_REGION_END)
 
     return p
 

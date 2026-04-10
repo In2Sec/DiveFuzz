@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 from enum import IntEnum
+from typing import Dict
 
 class CSR(IntEnum):
     """
@@ -290,3 +291,30 @@ class CSR(IntEnum):
     DPC         = 0x7B1
     DSCRATCH0   = 0x7B2
     DSCRATCH1   = 0x7B3
+
+    # --------------------------
+    # Additional machine CSRs
+    # --------------------------
+    PMPCFG3     = 0x3A3   # PMP configuration 3
+    MSTATUSH    = 0x310   # RV32 high half of mstatus
+    HTIMEDELTA  = 0x605   # Hypervisor timer delta
+
+
+# =============================================================================
+# Derived lookup tables — single source of truth for name<->address mappings
+# =============================================================================
+
+# address → lowercase name  (derived from IntEnum; last member wins on collision)
+CSR_ADDR_TO_NAME: Dict[int, str] = {m.value: m.name.lower() for m in CSR}
+
+# assembly name → address
+# Covers all CSRs from the IntEnum plus assembly naming conventions that differ
+# from IntEnum member names (e.g., RV32 high-half counters, hpmcounterh aliases).
+CSR_NAME_TO_ADDR: Dict[str, int] = {m.name.lower(): m.value for m in CSR}
+
+# User-mode HPM counter high halves (RV32): hpmcounterh3-31 at 0xC83-0xC9F
+CSR_NAME_TO_ADDR.update({f"hpmcounterh{i}": 0xC80 + i for i in range(3, 32)})
+# Machine HPM counter high halves (RV32): mhpmcounterh3-31 at 0xB83-0xB9F
+CSR_NAME_TO_ADDR.update({f"mhpmcounterh{i}": 0xB80 + i for i in range(3, 32)})
+# stimecmp aliases used by some assemblers
+CSR_NAME_TO_ADDR.update({"vstimecmp": CSR.VSTIMECMP, "vstimecmph": CSR.VSTIMECMPH})
